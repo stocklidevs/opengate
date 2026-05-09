@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "name": "qwen_nested_powershell_20260509",
+  "source_capture": "captures/20260509-123610-677429-proxy-c9b21604.json",
+  "created_at": "2026-05-09T12:36:10.677429+00:00",
+  "notes": "Qwen emitted a shell command string that itself launched powershell.exe -Command. The old proxy wrapped that string again and Codex rejected the call.",
+  "request": {
+    "model": "Qwen3-Coder-Next",
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "stream": false,
+    "store": false,
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Inspect the current directory with shell, then reply with the number of entries you saw."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell",
+        "description": "Runs a Powershell command (Windows) and returns its output.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "justification": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "upstream_response": {
+    "id": "resp_trace_nested_powershell",
+    "object": "response",
+    "created_at": 1778330170,
+    "status": "completed",
+    "model": "Qwen3-Coder-Next",
+    "output": [
+      {
+        "id": "fc_trace_nested_powershell",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": "chatcmpl-tool-bca75a340d5899f4",
+        "name": "shell",
+        "arguments": "{\"command\": \"powershell.exe -Command \\\"Get-ChildItem -Force | Measure-Object | Select-Object -ExpandProperty Count\\\"\", \"justification\": \"Count entries in current directory\"}"
+      }
+    ]
+  },
+  "expected": {
+    "no_text_leaks": true,
+    "no_invalid_tool_calls": true,
+    "no_command_quality_issues": true,
+    "minimum_structured_argument_repairs": 1,
+    "expected_tool_calls": [
+      "shell"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+captures/*.json
+logs/*.log
+logs/*.out
+logs/*.err
+runs/*.json
+runs/codex-live/

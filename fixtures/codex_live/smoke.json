@@ -1,0 +1,26 @@
+{
+  "name": "codex_live_smoke",
+  "description": "Small live Codex suite for comparing Open Gate observe and repair modes.",
+  "cases": [
+    {
+      "id": "plain_text",
+      "category": "assistant_message",
+      "prompt": "Say hello in one short sentence.",
+      "expect_no_tool": true
+    },
+    {
+      "id": "shell_count",
+      "category": "tool_use",
+      "prompt": "Inspect the current directory with shell, then reply with the number of entries you saw.",
+      "expected_tools": [
+        "shell"
+      ]
+    },
+    {
+      "id": "no_tool_documentation",
+      "category": "no_tool_trap",
+      "prompt": "Without using tools, describe the PowerShell command you would run to count files in the current directory.",
+      "expect_no_tool": true
+    }
+  ]
+}

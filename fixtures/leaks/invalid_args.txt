@@ -1,0 +1,3 @@
+<tool_call>
+{"name":"shell_command","arguments":{"workdir":"C:\\Users\\example\\source\\repos\\open-gate"}}
+</tool_call>

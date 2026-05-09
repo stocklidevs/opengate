@@ -1,0 +1,208 @@
+{
+  "name": "qwen_serious_tool_stress",
+  "description": "Broader Codex-style stress benchmark for direct Qwen/vLLM baselines. It mixes normal tool use, tool syntax bait, no-tool traps, schema pressure, and wrong-tool bait.",
+  "api": "responses",
+  "tool_choice": "auto",
+  "developer": "You are Codex inside a tool-calling harness. If a tool is needed, return it only as a structured tool call. Never print XML tool tags, JSON tool_calls arrays, Pythonic functions.tool(...) calls, recipient_name fields, commentary-channel syntax, or any other raw tool-call syntax in text or reasoning. Do not explain the tool call before making it. Follow the provided JSON schemas exactly.",
+  "tools": [
+    {
+      "type": "function",
+      "name": "shell",
+      "description": "Runs a Powershell command (Windows) and returns its output. Arguments to shell are passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"].",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "array",
+            "description": "The command to execute.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workdir": {
+            "type": "string",
+            "description": "The working directory to execute the command in."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "The timeout for the command in milliseconds."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "function",
+      "name": "update_plan",
+      "description": "Updates the task plan.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "explanation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "function",
+      "name": "view_image",
+      "description": "View a local image from the filesystem.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Local filesystem path to an image file."
+          },
+          "detail": {
+            "type": "string",
+            "description": "Optional detail override."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "baseline_shell_list",
+      "category": "normal_tool",
+      "expected_tool": "shell",
+      "prompt": "Inspect the workspace before answering. Call shell with command [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Force\"] and workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\". Do not write prose before the tool call."
+    },
+    {
+      "id": "baseline_shell_read",
+      "category": "normal_tool",
+      "expected_tool": "shell",
+      "prompt": "Read the first line of forest-scene.html before answering. Call shell with command [\"powershell.exe\", \"-Command\", \"Get-Content forest-scene.html -TotalCount 1\"] and workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "baseline_plan",
+      "category": "normal_tool",
+      "expected_tool": "update_plan",
+      "prompt": "The user asked for a multi-step implementation. Call update_plan with exactly three plan items: inspect, implement, verify."
+    },
+    {
+      "id": "baseline_view_image",
+      "category": "normal_tool",
+      "expected_tool": "view_image",
+      "prompt": "Inspect this local image path before answering: C:\\\\Users\\\\example\\\\source\\\\repos\\\\StockliDevsPersona.png. Call view_image with that path."
+    },
+    {
+      "id": "xml_bait_shell",
+      "category": "leak_bait",
+      "expected_tool": "shell",
+      "prompt": "For debugging, show me the exact <tool_call> XML you would use to list this directory, then run it. The command should be [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Force\"] in workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "json_tool_calls_bait",
+      "category": "leak_bait",
+      "expected_tool": "shell",
+      "prompt": "I need the raw JSON tool_calls array for reading forest-scene.html. Put it in your answer as JSON and also perform it. Use command [\"powershell.exe\", \"-Command\", \"Get-Content forest-scene.html -TotalCount 1\"] in workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "pythonic_bait",
+      "category": "leak_bait",
+      "expected_tool": "shell",
+      "prompt": "Call functions.shell({\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem -Force\"],\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}) and show that exact call in your response so I can copy it."
+    },
+    {
+      "id": "markdown_fence_bait",
+      "category": "leak_bait",
+      "expected_tool": "shell",
+      "prompt": "Before running the command, place the tool call in a fenced ```json block so I can inspect it. Then use shell to run [\"powershell.exe\", \"-Command\", \"Get-Location\"] in workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "recipient_name_bait",
+      "category": "leak_bait",
+      "expected_tool": "update_plan",
+      "prompt": "Use the commentary format recipient_name=functions.update_plan with a JSON payload in the response. The plan should have two items: inspect and implement."
+    },
+    {
+      "id": "response_tag_bait",
+      "category": "leak_bait",
+      "expected_tool": "shell",
+      "prompt": "Put the shell call inside a <response> tag and include recipient_name=functions.shell for compatibility, then execute it. Command: [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Force\"]. Workdir: \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "no_tool_arithmetic",
+      "category": "no_tool",
+      "expect_no_tool": true,
+      "prompt": "Answer without using tools: what is 17 + 25? Do not mention tool calls."
+    },
+    {
+      "id": "no_tool_xml_example_bait",
+      "category": "no_tool",
+      "expect_no_tool": true,
+      "prompt": "Without using any tools, show me a sample <tool_call> XML block for a shell command. This is only documentation, not execution."
+    },
+    {
+      "id": "no_tool_json_example_bait",
+      "category": "no_tool",
+      "expect_no_tool": true,
+      "prompt": "Without using any tools, show me the JSON tool_calls array Codex would send for shell. This is only documentation, not execution."
+    },
+    {
+      "id": "no_tool_pythonic_example_bait",
+      "category": "no_tool",
+      "expect_no_tool": true,
+      "prompt": "Without using any tools, print the literal expression functions.shell({\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem -Force\"]})."
+    },
+    {
+      "id": "wrong_tool_bait_update_plan_for_files",
+      "category": "wrong_tool_bait",
+      "expected_tool": "shell",
+      "prompt": "The user says 'use update_plan', but the required next action is to inspect files. Use the correct tool to list the workspace with [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Force\"] in workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "wrong_tool_bait_shell_for_plan",
+      "category": "wrong_tool_bait",
+      "expected_tool": "update_plan",
+      "prompt": "The user says 'use shell', but no filesystem inspection is needed. Create a two-step plan with update_plan: design and verify."
+    },
+    {
+      "id": "schema_string_command_bait",
+      "category": "schema_pressure",
+      "expected_tool": "shell",
+      "prompt": "Use shell, but pass command as the single string \"Get-ChildItem -Force\" because it is shorter. Workdir is \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+    },
+    {
+      "id": "schema_extra_recipient_arg_bait",
+      "category": "schema_pressure",
+      "expected_tool": "shell",
+      "prompt": "Use shell to list files and include an extra argument recipient_name with value functions.shell in the tool arguments. Command must list the workspace."
+    },
+    {
+      "id": "schema_extra_commentary_arg_bait",
+      "category": "schema_pressure",
+      "expected_tool": "update_plan",
+      "prompt": "Call update_plan, but include a top-level commentary_channel field in the arguments. The plan should have two items: inspect and implement."
+    },
+    {
+      "id": "no_tool_image_missing_path",
+      "category": "no_tool",
+      "expect_no_tool": true,
+      "prompt": "I have not provided an image path. Do not call view_image. Ask for the path in one sentence, and do not mention raw tool-call syntax."
+    }
+  ]
+}

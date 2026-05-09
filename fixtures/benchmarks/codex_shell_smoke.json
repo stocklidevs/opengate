@@ -1,0 +1,91 @@
+{
+  "name": "codex_shell_smoke",
+  "description": "Small Codex-like tool-call benchmark focused on whether the model returns structured shell calls or leaks tool syntax into text.",
+  "api": "responses",
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "type": "function",
+      "name": "shell",
+      "description": "Runs a Powershell command (Windows) and returns its output. Arguments to shell are passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"].",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "array",
+            "description": "The command to execute.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workdir": {
+            "type": "string",
+            "description": "The working directory to execute the command in."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "The timeout for the command in milliseconds."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "function",
+      "name": "update_plan",
+      "description": "Updates the task plan.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "explanation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "must_list_workspace",
+      "category": "single_tool",
+      "expected_tool": "shell",
+      "expected_required_args": [
+        "command"
+      ],
+      "prompt": "You are Codex running in a Windows coding workspace. You must inspect the workspace before answering. Call the shell tool with command [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Force\"] and workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\". Do not write prose before the tool call."
+    },
+    {
+      "id": "must_read_file",
+      "category": "single_tool",
+      "expected_tool": "shell",
+      "expected_required_args": [
+        "command"
+      ],
+      "prompt": "You are Codex running in a Windows coding workspace. You need to read the first line of forest-scene.html before answering. Call the shell tool with command [\"powershell.exe\", \"-Command\", \"Get-Content forest-scene.html -TotalCount 1\"] and workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\". Do not write prose before the tool call."
+    },
+    {
+      "id": "plan_not_shell",
+      "category": "tool_selection",
+      "expected_tool": "update_plan",
+      "expected_required_args": [
+        "plan"
+      ],
+      "prompt": "You are Codex. The user asked for a multi-step implementation. Call update_plan with at least two plan items. Do not call shell and do not write prose before the tool call."
+    }
+  ]
+}

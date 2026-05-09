@@ -1,0 +1,1 @@
+{"tool_calls":[{"function":{"name":"shell_command","arguments":"{\"command\":\"Get-ChildItem -Force\",\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\open-gate\"}"}}]}

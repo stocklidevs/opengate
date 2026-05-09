@@ -1,0 +1,5 @@
+I need to inspect the folder first.
+
+<tool_call>
+{"name":"shell_command","arguments":{"command":"Get-ChildItem -Force","workdir":"C:\\Users\\example\\source\\repos\\open-gate","timeout_ms":10000}}
+</tool_call>

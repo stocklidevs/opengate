@@ -1,0 +1,42 @@
+[
+  {
+    "type": "function",
+    "name": "shell_command",
+    "description": "Runs a Powershell command and returns its output.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "workdir": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "apply_patch",
+    "description": "Applies a patch to files.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "patch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "patch"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

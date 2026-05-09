@@ -1,0 +1,3 @@
+Let me check the workspace.
+
+functions.shell_command({"command":"Get-ChildItem -Force","workdir":"C:\\Users\\example\\source\\repos\\open-gate","timeout_ms":10000})
