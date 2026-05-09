@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from open_gate.proxy import forward_responses_request, normalize_responses_response
+from open_gate.proxy import forward_responses_request, needs_flattened_input, normalize_responses_response, transform_upstream_request
 
 
 TOOLS = [
@@ -175,6 +175,34 @@ class ProxyNormalizationTests(unittest.TestCase):
             "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-Location\"]}",
         )
         self.assertEqual(result.normalization["mode"], "observe")
+
+    def test_detects_codex_history_that_needs_flattening_for_vllm(self) -> None:
+        input_items = [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Create a file."}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I will patch it."}]},
+            {"type": "function_call", "name": "apply_patch", "arguments": "{\"patch\":\"...\"}", "call_id": "call_1"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "Done"},
+        ]
+
+        self.assertTrue(needs_flattened_input(input_items))
+
+    def test_auto_transform_flattens_unsupported_codex_history(self) -> None:
+        request = {
+            "model": "Qwen3-Coder-Next",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Create a file."}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I will patch it."}]},
+                {"type": "function_call", "name": "apply_patch", "arguments": "{\"patch\":\"...\"}", "call_id": "call_1"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "Done"},
+            ],
+        }
+
+        details = transform_upstream_request(request, "auto")
+
+        self.assertEqual(details["input_mode"], "flattened")
+        self.assertIsInstance(request["input"], str)
+        self.assertIn("assistant tool call apply_patch call_1", request["input"])
+        self.assertIn("tool output call_1", request["input"])
 
 
 if __name__ == "__main__":

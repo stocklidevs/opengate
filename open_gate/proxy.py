@@ -35,6 +35,7 @@ NEGATIVE_TOOL_INTENT = (
 @dataclass
 class ProxyResult:
     upstream_request: JsonObject
+    upstream_transform: JsonObject
     upstream_status: int
     upstream_response: JsonObject
     normalized_response: JsonObject
@@ -48,12 +49,16 @@ def forward_responses_request(
     api_key: str,
     timeout: float,
     normalization_mode: str = "repair",
+    upstream_input_mode: str = "auto",
 ) -> ProxyResult:
     if normalization_mode not in {"repair", "observe"}:
         raise ValueError(f"Unsupported normalization mode: {normalization_mode}")
+    if upstream_input_mode not in {"auto", "native", "flatten"}:
+        raise ValueError(f"Unsupported upstream input mode: {upstream_input_mode}")
     upstream_request = deepcopy(request_body)
     requested_stream = bool(upstream_request.get("stream"))
     upstream_request["stream"] = False
+    upstream_transform = transform_upstream_request(upstream_request, upstream_input_mode)
     status, upstream_response = post_json(upstream_base_url, "/responses", upstream_request, api_key, timeout)
     normalized_response, normalization = normalize_responses_response(upstream_response, request_body)
     returned_response = deepcopy(normalized_response if normalization_mode == "repair" else upstream_response)
@@ -63,12 +68,86 @@ def forward_responses_request(
         returned_response["streamed_by_open_gate"] = True
     return ProxyResult(
         upstream_request=upstream_request,
+        upstream_transform=upstream_transform,
         upstream_status=status,
         upstream_response=upstream_response,
         normalized_response=normalized_response,
         returned_response=returned_response,
         normalization=normalization,
     )
+
+
+def transform_upstream_request(request_body: JsonObject, upstream_input_mode: str) -> JsonObject:
+    original_input = request_body.get("input")
+    should_flatten = upstream_input_mode == "flatten" or (
+        upstream_input_mode == "auto" and needs_flattened_input(original_input)
+    )
+    if not should_flatten:
+        return {
+            "input_mode": "native",
+            "reason": "compatible_input" if upstream_input_mode == "auto" else "forced_native",
+            "original_input_items": len(original_input) if isinstance(original_input, list) else None,
+        }
+
+    flattened = flatten_responses_input(original_input)
+    request_body["input"] = flattened
+    return {
+        "input_mode": "flattened",
+        "reason": "unsupported_responses_history" if upstream_input_mode == "auto" else "forced_flatten",
+        "original_input_items": len(original_input) if isinstance(original_input, list) else None,
+        "flattened_chars": len(flattened),
+    }
+
+
+def needs_flattened_input(input_value: Any) -> bool:
+    if not isinstance(input_value, list):
+        return False
+    for item in input_value:
+        if not isinstance(item, dict):
+            return True
+        item_type = item.get("type")
+        if item_type != "message":
+            return True
+        role = item.get("role")
+        if role not in {"developer", "system", "user"}:
+            return True
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("type") not in {"input_text", "text"}:
+                return True
+    return False
+
+
+def flatten_responses_input(input_value: Any) -> str:
+    if isinstance(input_value, str):
+        return input_value
+    if not isinstance(input_value, list):
+        return flatten_content(input_value)
+
+    blocks: list[str] = []
+    for item in input_value:
+        if isinstance(item, dict):
+            block = flatten_input_item(item)
+        else:
+            block = str(item)
+        if block.strip():
+            blocks.append(block.strip())
+    return "\n\n".join(blocks)
+
+
+def flatten_input_item(item: JsonObject) -> str:
+    item_type = item.get("type")
+    if item_type == "message":
+        role = item.get("role") or "message"
+        return f"{role}:\n{flatten_content(item.get('content'))}"
+    if item_type in {"function_call", "custom_tool_call"}:
+        name = item.get("name") or "tool"
+        call_id = item.get("call_id") or ""
+        arguments = item.get("arguments") or "{}"
+        return f"assistant tool call {name} {call_id}:\n{arguments}"
+    if item_type in {"function_call_output", "custom_tool_call_output"}:
+        call_id = item.get("call_id") or ""
+        return f"tool output {call_id}:\n{flatten_content(item.get('output'))}"
+    return f"{item_type or 'item'}:\n{json.dumps(item, ensure_ascii=True, separators=(',', ':'))}"
 
 
 def post_json(base_url: str, path: str, body: JsonObject, api_key: str, timeout: float) -> tuple[int, JsonObject]:

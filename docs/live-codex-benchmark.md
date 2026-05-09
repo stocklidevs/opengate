@@ -16,6 +16,8 @@ Open Gate has two proxy modes:
 - `repair`: return the normalized response to Codex. This is the user-facing mode.
 - `observe`: compute and record the same normalization report, but return the raw upstream response. This is useful for baseline comparisons.
 
+Open Gate also has an upstream input mode. The default, `auto`, forwards simple user turns natively and flattens richer Codex history before sending it to vLLM. This avoids vLLM 400 validation errors on assistant history, `function_call`, or `function_call_output` input items.
+
 Start the proxy manually:
 
 ```powershell

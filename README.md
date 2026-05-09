@@ -15,6 +15,7 @@ Current release: `0.2.0`. See `CHANGELOG.md` for release notes and `docs\release
 - `open_gate.server` runs a fake `/v1/responses` and `/v1/chat/completions` server.
 - `open_gate.server --upstream-base-url ...` or `python -m open_gate --upstream ...` runs buffered `/v1/responses` proxy mode.
 - Proxy mode supports `--normalization-mode repair` and `--normalization-mode observe`.
+- Proxy mode defaults to `--upstream-input-mode auto`, which flattens multi-turn Codex Responses history when vLLM rejects native item types.
 - Every request is written to `captures/` with sensitive headers redacted.
 - `open_gate.linter` extracts leaked tool calls from XML tags, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
 - `open_gate.command_quality` detects shell commands that are structured but likely to be rejected by Codex policy, starting with nested PowerShell.
@@ -39,6 +40,8 @@ Use `repair` for normal usage and `observe` to capture what Open Gate would fix 
 ```powershell
 python -m open_gate --upstream http://127.0.0.1:8001/v1 --normalization-mode observe
 ```
+
+Use `--upstream-input-mode native` only when the upstream server fully supports Codex-style multi-turn Responses input. vLLM may reject assistant history, function-call items, or tool-output items unless Open Gate flattens that history first.
 
 Use a temporary Codex provider/profile that points at `http://127.0.0.1:8765/v1` with `wire_api = "responses"`. Your current real model endpoint can stay as:
 

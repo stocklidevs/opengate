@@ -6,6 +6,11 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 - Minor releases may add proxy modes, report fields, fixture schemas, or benchmark suites.
 - Breaking changes can still happen before 1.0 and should be called out here.
 
+## Unreleased
+
+- Added automatic upstream input flattening for vLLM `/v1/responses` requests that contain Codex assistant history, function calls, or tool outputs.
+- Added reporting for flattened upstream requests.
+
 ## 0.2.0 - 2026-05-09
 
 - Added `repair` and `observe` proxy modes.

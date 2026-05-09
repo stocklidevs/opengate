@@ -38,6 +38,7 @@ class Handler(BaseHTTPRequestHandler):
                     "service": "open-gate",
                     "mode": "proxy" if self.server.config.get("upstream_base_url") else "capture",
                     "normalization_mode": self.server.config.get("normalization_mode", "repair"),
+                    "upstream_input_mode": self.server.config.get("upstream_input_mode", "auto"),
                 }
             )
             return
@@ -83,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
             api_key=self.server.config["upstream_api_key"],
             timeout=float(self.server.config["upstream_timeout"]),
             normalization_mode=self.server.config["normalization_mode"],
+            upstream_input_mode=self.server.config["upstream_input_mode"],
         )
         response = result.returned_response
         status = 200
@@ -101,6 +103,7 @@ class Handler(BaseHTTPRequestHandler):
                     "base_url": self.server.config["upstream_base_url"],
                     "status": result.upstream_status,
                     "request": result.upstream_request,
+                    "transform": result.upstream_transform,
                     "response": result.upstream_response,
                 },
                 "normalization_mode": self.server.config["normalization_mode"],
@@ -315,6 +318,12 @@ def main() -> int:
         default="repair",
         help="repair returns normalized responses; observe records normalizer findings but returns raw upstream responses.",
     )
+    parser.add_argument(
+        "--upstream-input-mode",
+        choices=["auto", "native", "flatten"],
+        default="auto",
+        help="auto flattens Responses history that vLLM rejects; native forwards input unchanged; flatten always sends a string transcript upstream.",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -327,6 +336,7 @@ def main() -> int:
         "upstream_api_key": args.upstream_api_key,
         "upstream_timeout": args.upstream_timeout,
         "normalization_mode": args.normalization_mode,
+        "upstream_input_mode": args.upstream_input_mode,
         "quiet": args.quiet,
     }
     server = CaptureServer((args.host, args.port), Handler, config)

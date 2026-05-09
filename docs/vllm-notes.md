@@ -45,6 +45,8 @@ http://127.0.0.1:8001/v1
 
 The important tool-related flags are `--enable-auto-tool-choice` and `--tool-call-parser qwen3_coder`. Open Gate still sits in front of the server because even with vLLM tool parsing enabled, the model can emit tool arguments that are syntactically structured but rejected by Codex policy, such as nested PowerShell.
 
+Open Gate also adapts Codex's multi-turn Responses input for vLLM. A first user-only turn can be accepted natively, but later Codex turns may include assistant history, `function_call`, and `function_call_output` items. vLLM can reject those with a 400 validation error. Open Gate's default `--upstream-input-mode auto` detects that shape and sends vLLM a flattened transcript while preserving the normal Responses API contract for Codex.
+
 The request-size probe used `POST /tokenize` to avoid generation. The server accepted JSON request bodies of approximately:
 
 - 4 KB

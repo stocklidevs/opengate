@@ -38,6 +38,7 @@ class CodexReportTests(unittest.TestCase):
                         },
                         "upstream": {
                             "status": 200,
+                            "transform": {"input_mode": "flattened", "reason": "unsupported_responses_history"},
                             "response": {
                                 "output": [
                                     {
@@ -81,6 +82,7 @@ class CodexReportTests(unittest.TestCase):
             report = build_report(capture_dir, codex_dir)
 
         self.assertEqual(report["summary"]["proxy_exchanges"], 1)
+        self.assertEqual(report["summary"]["flattened_upstream_requests"], 1)
         self.assertEqual(report["summary"]["structured_argument_repairs"], 1)
         self.assertEqual(report["summary"]["returned_command_quality_issues"], 0)
         self.assertEqual(report["summary"]["codex_turns_completed"], 1)
