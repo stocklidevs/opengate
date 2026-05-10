@@ -165,7 +165,7 @@ Summarise an existing live run:
 python -m open_gate.codex_report runs\codex-live\<run-id>\captures --codex-dir runs\codex-live\<run-id> --pretty --summary-only
 ```
 
-Live benchmark details are in `docs\live-codex-benchmark.md`.
+Live benchmark details are in `docs\live-codex-benchmark.md`. The first known-good Qwen compatibility note is in `docs\qwen3-coder-next.md`, and the repeatable process for the next model is in `docs\model-adaptation-checklist.md`.
 
 Latest local smoke result:
 
@@ -208,4 +208,4 @@ Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml
 
 ## Next Milestone
 
-The next step is to expand `fixtures\codex_live\smoke.json` into a broader live coding suite and publish paired `observe` vs `repair` reports for Qwen3-Coder-Next.
+The next step is to adapt a second model using `docs\model-adaptation-checklist.md`, then compare its raw, observe, and repair reports against the Qwen3-Coder-Next known-good baseline.

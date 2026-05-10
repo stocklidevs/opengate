@@ -7,3 +7,4 @@ logs/*.out
 logs/*.err
 runs/*.json
 runs/codex-live/
+runs/qwen-known-good/
