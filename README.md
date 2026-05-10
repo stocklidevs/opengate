@@ -1,6 +1,6 @@
 # Open Gate
 
-![Version](https://img.shields.io/badge/version-0.3.0-blue)
+![Version](https://img.shields.io/badge/version-0.4.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![API](https://img.shields.io/badge/API-Responses-111827)
 ![Proxy Modes](https://img.shields.io/badge/proxy-repair%20%7C%20observe-16A34A)
@@ -8,7 +8,7 @@
 
 Open Gate is a local harness and proxy for making open coding models behave like a Responses API agent backend for Codex. It captures real Codex traffic, detects tool-call leakage, repairs common open-model tool-call failures, and produces repeatable baseline reports that other home-lab users can compare.
 
-Current release: `0.3.0`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
+Current release: `0.4.0`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
 
 ## Current Shape
 
@@ -19,7 +19,7 @@ Current release: `0.3.0`. See `CHANGELOG.md` for release notes and `docs\release
 - Streamed proxy requests emit SSE heartbeat comments while waiting for vLLM, then replay the normalized response as Responses SSE events.
 - Every request is written to `captures/` with sensitive headers redacted.
 - `open_gate.linter` extracts leaked tool calls from XML tags, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
-- `open_gate.command_quality` detects shell commands that are structured but likely to be rejected by Codex policy, starting with nested PowerShell.
+- `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex, including nested PowerShell, Windows PowerShell `&&`, bad here-strings, fragile Python one-liners, and non-image `view_image` paths.
 - `open_gate.regression` replays captured upstream responses through normalization as stable fixtures.
 - `open_gate.codex_report` summarizes live Codex JSONL output and proxy captures.
 - Fixtures in `fixtures/leaks/` model common bad outputs from open-model tool-call formats.
@@ -95,6 +95,8 @@ python -m open_gate.inspect_capture --pretty
 python -m open_gate.lint fixtures\leaks\qwen_xml_tool_call.txt --tools fixtures\tools\codex_like_tools.json --pretty
 ```
 
+The lint output includes `command_quality_issues` for tool calls that are syntactically structured but operationally suspicious. This catches failures like `cd glm-test && ...` under Windows PowerShell, `uv run playwright ...` before Playwright is installed, or `view_image` pointed at a directory. See `docs\tool-call-linter.md`.
+
 ## Benchmark Tool Calls
 
 The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. Full setup notes are in `docs\vllm-notes.md`.
@@ -129,7 +131,7 @@ For interactive Codex usage, see `docs\interactive-codex.md`.
 
 The key summary fields are `strict_successes_rate`, `leaks_rate`, `argument_leaks_rate`, `proxy_recoverable_rate`, `missed_tool_calls_rate`, and `invalid_tool_calls_rate`. A leaked but parseable tool call is counted as a failure for the raw backend and as `proxy_recoverable`, which is the number Open Gate should drive toward a structured success.
 
-`command_quality_issues_rate` is stricter than basic tool-call validity. It catches structured commands that are likely to fail inside Codex even though they parse as valid JSON, such as `powershell.exe -Command` nested inside another PowerShell command.
+`command_quality_issues_rate` is stricter than basic tool-call validity. It catches structured commands that are likely to fail inside Codex even though they parse as valid JSON, such as `powershell.exe -Command` nested inside another PowerShell command, Windows PowerShell `&&`, malformed here-strings, and brittle `python -c` compound statements.
 
 Probe request-size behavior without generation:
 
@@ -204,7 +206,7 @@ The first Codex capture showed `POST /v1/responses` with `stream: true`, three i
 
 ## Versioning
 
-Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.3.0`.
+Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.4.0`.
 
 ## Next Milestone
 

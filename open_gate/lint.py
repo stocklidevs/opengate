@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .command_quality import inspect_tool_calls
 from .linter import analyze_text
 
 
@@ -20,10 +21,12 @@ def main() -> int:
         tools = json.loads(args.tools.read_text(encoding="utf-8"))
 
     report = analyze_text(text, tools)
+    output = report.to_json()
+    output["command_quality_issues"] = inspect_tool_calls(report.tool_calls)
     if args.pretty:
-        print(json.dumps(report.to_json(), indent=2, ensure_ascii=True))
+        print(json.dumps(output, indent=2, ensure_ascii=True))
     else:
-        print(json.dumps(report.to_json(), separators=(",", ":"), ensure_ascii=True))
+        print(json.dumps(output, separators=(",", ":"), ensure_ascii=True))
     return 0
 
 

@@ -11,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from .command_quality import repair_shell_arguments
+from .command_quality import inspect_tool_calls, repair_shell_arguments
 from .linter import ToolCall, analyze_text, load_tool_specs
 
 
@@ -180,6 +180,7 @@ def post_json(base_url: str, path: str, body: JsonObject, api_key: str, timeout:
 def normalize_responses_response(response: JsonObject, original_request: JsonObject) -> tuple[JsonObject, JsonObject]:
     normalized = deepcopy(response)
     tools = original_request.get("tools") if isinstance(original_request.get("tools"), list) else []
+    upstream_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
     repairs = repair_structured_calls(normalized, tools)
     suppressed = suppress_structured_calls_if_blocked(normalized, original_request)
     text_items = collect_message_text_items(normalized)
@@ -205,11 +206,14 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         output[:] = [item for item in output if not is_empty_message(item)]
         for call in promoted:
             output.append(build_function_call_item(call))
+    normalized_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
 
     normalization = {
         "normalized_at": datetime.now(timezone.utc).isoformat(),
         "suppressed_structured_calls": suppressed,
         "structured_argument_repairs": repairs,
+        "upstream_command_quality_issues": upstream_command_quality_issues,
+        "normalized_command_quality_issues": normalized_command_quality_issues,
         "stripped_text_items": stripped,
         "existing_structured_calls": len(existing_calls),
         "promoted_tool_calls": [call.to_json() for call in promoted] if should_promote else [],

@@ -8,6 +8,13 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-09
+
+- Added command-quality lint rules for Windows PowerShell chain operators, bad here-string headers, Python compound one-liners, relative `cd` usage, `uv run playwright`, non-image `view_image` paths, and skill files read as MCP resources.
+- Added repair support for PowerShell commands encoded as JSON arrays inside another PowerShell `-Command` string.
+- Added upstream and normalized command-quality issue metadata to proxy normalization captures.
+- Added command-quality issue output to `python -m open_gate.lint`.
+
 ## 0.3.0 - 2026-05-09
 
 - Added SSE heartbeat comments for streamed Codex requests while Open Gate waits on buffered upstream vLLM responses.

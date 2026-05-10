@@ -125,6 +125,8 @@ class ProxyNormalizationTests(unittest.TestCase):
             "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-Location\"]}",
         )
         self.assertEqual(len(details["structured_argument_repairs"]), 1)
+        self.assertEqual(details["upstream_command_quality_issues"][0]["issue"], "string_command")
+        self.assertEqual(details["normalized_command_quality_issues"], [])
 
     def test_repairs_nested_powershell_command_argument(self) -> None:
         response = {
@@ -146,6 +148,29 @@ class ProxyNormalizationTests(unittest.TestCase):
             "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-Location\"]}",
         )
         self.assertEqual(len(details["structured_argument_repairs"]), 1)
+        self.assertEqual(details["upstream_command_quality_issues"][0]["issue"], "string_command")
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_records_unrepaired_command_quality_issues(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"cd glm-test && uv run playwright install chromium\"]}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Run the command."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(
+            {issue["issue"] for issue in details["normalized_command_quality_issues"]},
+            {"windows_powershell_chain_operator", "uv_run_playwright_entrypoint", "relative_cd_without_workdir"},
+        )
 
     def test_observe_mode_returns_raw_response_but_records_repair(self) -> None:
         response = {
