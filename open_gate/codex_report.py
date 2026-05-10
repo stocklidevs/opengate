@@ -84,6 +84,12 @@ def summarize_capture(path: Path) -> JsonObject:
         "normalization_mode": capture.get("normalization_mode") or normalization.get("mode"),
         "upstream_input_mode": upstream_transform.get("input_mode"),
         "upstream_input_transform_reason": upstream_transform.get("reason"),
+        "context_policy": upstream_transform.get("context_policy"),
+        "flattened_chars": upstream_transform.get("flattened_chars"),
+        "original_flattened_chars": upstream_transform.get("original_flattened_chars"),
+        "dropped_context_chars": upstream_transform.get("dropped_context_chars"),
+        "summarized_input_items": upstream_transform.get("summarized_input_items"),
+        "exact_recent_items": upstream_transform.get("exact_recent_items"),
         "upstream_status": upstream.get("status"),
         "duration_seconds": timing.get("duration_seconds"),
         "stream_heartbeats": timing.get("stream_heartbeats"),
@@ -174,11 +180,20 @@ def summarize(captures: list[JsonObject], codex_runs: list[JsonObject]) -> JsonO
     total_captures = len(captures)
     total_codex = len(codex_runs)
     durations = [float(item["duration_seconds"]) for item in captures if isinstance(item.get("duration_seconds"), int | float)]
+    flattened_sizes = [int(item["flattened_chars"]) for item in captures if isinstance(item.get("flattened_chars"), int)]
+    original_flattened_sizes = [
+        int(item["original_flattened_chars"]) for item in captures if isinstance(item.get("original_flattened_chars"), int)
+    ]
     return {
         "proxy_exchanges": total_captures,
         "upstream_errors": sum(1 for item in captures if item.get("upstream_status") and item["upstream_status"] >= 400),
         "captures_with_repairs": sum(1 for item in captures if item.get("repairs")),
         "flattened_upstream_requests": sum(1 for item in captures if item.get("upstream_input_mode") == "flattened"),
+        "spoon_context_requests": sum(1 for item in captures if item.get("context_policy") == "spoon"),
+        "max_flattened_chars": max(flattened_sizes) if flattened_sizes else 0,
+        "max_original_flattened_chars": max(original_flattened_sizes) if original_flattened_sizes else 0,
+        "dropped_context_chars": sum(int(item.get("dropped_context_chars") or 0) for item in captures),
+        "summarized_input_items": sum(int(item.get("summarized_input_items") or 0) for item in captures),
         "stream_heartbeats": sum(int(item.get("stream_heartbeats") or 0) for item in captures),
         "average_proxy_duration_seconds": round(sum(durations) / len(durations), 3) if durations else 0.0,
         "max_proxy_duration_seconds": round(max(durations), 3) if durations else 0.0,

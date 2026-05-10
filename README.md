@@ -1,14 +1,15 @@
 # Open Gate
 
-![Version](https://img.shields.io/badge/version-0.4.0-blue)
+![Version](https://img.shields.io/badge/version-0.5.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![API](https://img.shields.io/badge/API-Responses-111827)
 ![Proxy Modes](https://img.shields.io/badge/proxy-repair%20%7C%20observe-16A34A)
+![Context](https://img.shields.io/badge/context-full%20%7C%20spoon-0EA5E9)
 ![Platform](https://img.shields.io/badge/platform-Windows%20first-7C3AED)
 
 Open Gate is a local harness and proxy for making open coding models behave like a Responses API agent backend for Codex. It captures real Codex traffic, detects tool-call leakage, repairs common open-model tool-call failures, and produces repeatable baseline reports that other home-lab users can compare.
 
-Current release: `0.4.0`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
+Current release: `0.5.0`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
 
 ## Current Shape
 
@@ -16,6 +17,7 @@ Current release: `0.4.0`. See `CHANGELOG.md` for release notes and `docs\release
 - `open_gate.server --upstream-base-url ...` or `python -m open_gate --upstream ...` runs buffered-upstream `/v1/responses` proxy mode.
 - Proxy mode supports `--normalization-mode repair` and `--normalization-mode observe`.
 - Proxy mode defaults to `--upstream-input-mode auto`, which flattens multi-turn Codex Responses history when vLLM rejects native item types.
+- Proxy mode supports `--context-policy spoon`, which compacts older Codex history, keeps recent turns exact, and carries forward concise constraints from prior tool failures.
 - Streamed proxy requests emit SSE heartbeat comments while waiting for vLLM, then replay the normalized response as Responses SSE events.
 - Every request is written to `captures/` with sensitive headers redacted.
 - `open_gate.linter` extracts leaked tool calls from XML tags, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
@@ -43,6 +45,20 @@ python -m open_gate --upstream http://127.0.0.1:8001/v1 --normalization-mode obs
 ```
 
 Use `--upstream-input-mode native` only when the upstream server fully supports Codex-style multi-turn Responses input. vLLM may reject assistant history, function-call items, or tool-output items unless Open Gate flattens that history first.
+
+Use `--context-policy spoon` for long interactive Codex runs where the history can balloon and the model may repeat failed tool paths:
+
+```powershell
+python -m open_gate `
+  --upstream http://127.0.0.1:8001/v1 `
+  --normalization-mode repair `
+  --upstream-input-mode auto `
+  --context-policy spoon `
+  --context-max-chars 60000 `
+  --context-recent-items 10
+```
+
+See `docs\context-policy.md` for the spoon-feed compiler and its capture metrics.
 
 Use `--stream-heartbeat-seconds` to tune keepalive comments for streamed Codex requests. The default is `5.0`, which keeps Codex from seeing a silent socket while Qwen/vLLM spends a minute or more producing a large tool call.
 
@@ -155,6 +171,12 @@ Run actual `codex exec` prompts through Open Gate:
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_codex_live_benchmark.ps1 -Mode repair -Runs 3
 ```
 
+Run the same live harness with the spoon-feed context compiler:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_codex_live_benchmark.ps1 -Mode repair -ContextPolicy spoon -Runs 3
+```
+
 Run the same suite in raw-observation mode:
 
 ```powershell
@@ -206,7 +228,7 @@ The first Codex capture showed `POST /v1/responses` with `stream: true`, three i
 
 ## Versioning
 
-Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.4.0`.
+Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.5.0`.
 
 ## Next Milestone
 

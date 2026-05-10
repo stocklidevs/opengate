@@ -6,9 +6,10 @@ This note records the first known-good Open Gate setup for Qwen3-Coder-Next thro
 
 - Model: `Qwen3-Coder-Next`
 - Server: vLLM at `http://127.0.0.1:8001/v1`
-- Open Gate: `0.3.0`
+- Open Gate: `0.5.0`
 - Mode: `repair`
 - Upstream input mode: `auto`
+- Context policy: `spoon` for long interactive runs; `full` for apples-to-apples legacy baselines.
 - Validation date: `2026-05-10` UTC, `2026-05-09` America/New_York
 
 ## Required Setup
@@ -37,6 +38,9 @@ python -m open_gate `
   --upstream http://127.0.0.1:8001/v1 `
   --normalization-mode repair `
   --upstream-input-mode auto `
+  --context-policy spoon `
+  --context-max-chars 60000 `
+  --context-recent-items 10 `
   --stream-heartbeat-seconds 5
 ```
 
@@ -102,7 +106,8 @@ Use smaller deterministic prompts for pass/fail compatibility checks. Use large-
 ## Notes
 
 - `--upstream-input-mode auto` is required for later Codex turns because vLLM may reject native assistant history, `function_call`, and `function_call_output` input items.
+- `--context-policy spoon` is recommended for large interactive work. It prevents runaway flattened histories by summarizing older Codex state and preserving compact constraints from failed tool attempts.
 - `repair` mode is the recommended user-facing mode. In the known-good smoke, Qwen produced a shell command shape that Open Gate repaired before Codex saw it.
-- A later live test with web/screenshot tooling showed a different failure mode: Qwen produced valid structured tool calls that were operationally bad, including `view_image` on a directory, Windows PowerShell `&&`, malformed here-strings, brittle `python -c` async code, and `uv run playwright` before Playwright was installed. Open Gate `0.4.0` records these as command-quality issues.
+- A later live test with web/screenshot tooling showed a different failure mode: Qwen produced valid structured tool calls that were operationally bad, including `view_image` on a directory, Windows PowerShell `&&`, malformed here-strings, brittle `python -c` async code, and `uv run playwright` before Playwright was installed. Open Gate `0.4.0` records these as command-quality issues; Open Gate `0.5.0` can also feed the constraints back through `--context-policy spoon`.
 - Plugin and skill sync warnings from Codex are not Open Gate failures. They can appear when Codex tries to reach external OpenAI/GitHub plugin endpoints.
 - If Open Gate captures upstream status `599` with a socket permission error, rerun the smoke with local-network access to the vLLM host.

@@ -1,0 +1,13 @@
+Can you look at this site and refer to it for the next task: https://styles.refero.design/
+
+      Goal:
+      Build an immersive, visually striking, interactive webpage with a strong artistic direction. Choose one theme
+  only:
+      surreal forest, cosmic dreamscape, underwater bioluminescence, or abstract geometric ritual.
+      - Everything must be contained in index.html.
+      - No frameworks.
+      - The page must feel polished and intentional, not like a template.
+      - Include subtle motion, depth, glow, and atmosphere.
+      - Add at least one interactive element driven by mouse movement or clicks.
+      - Make it responsive and smooth on desktop.
+      - Keep performance reasonable.

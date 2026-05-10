@@ -3,7 +3,14 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from open_gate.proxy import forward_responses_request, needs_flattened_input, normalize_responses_response, transform_upstream_request
+from open_gate.proxy import (
+    build_proxy_error_response,
+    compile_responses_context,
+    forward_responses_request,
+    needs_flattened_input,
+    normalize_responses_response,
+    transform_upstream_request,
+)
 
 
 TOOLS = [
@@ -228,6 +235,130 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertIsInstance(request["input"], str)
         self.assertIn("assistant tool call apply_patch call_1", request["input"])
         self.assertIn("tool output call_1", request["input"])
+
+    def test_spoon_policy_forces_flattening_and_compacts_history(self) -> None:
+        request = {
+            "model": "Qwen3-Coder-Next",
+            "tools": TOOLS,
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Create an HTML page."}]},
+                {
+                    "type": "function_call",
+                    "name": "shell",
+                    "call_id": "call_bad",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"cd glm-test && uv run playwright install chromium\"]}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_bad",
+                    "output": "A" * 9000 + "\nFailed to spawn: playwright\n",
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now finish the page quickly."}]},
+            ],
+        }
+
+        details = transform_upstream_request(
+            request,
+            "auto",
+            context_policy="spoon",
+            context_max_chars=4000,
+            context_recent_items=1,
+        )
+
+        self.assertEqual(details["input_mode"], "flattened")
+        self.assertEqual(details["reason"], "unsupported_responses_history")
+        self.assertEqual(details["context_policy"], "spoon")
+        self.assertLessEqual(len(request["input"]), 4000)
+        self.assertIn("Open Gate context digest", request["input"])
+        self.assertIn("Now finish the page quickly.", request["input"])
+        self.assertIn("apply_patch is not available", request["input"])
+        self.assertNotIn("A" * 1000, request["input"])
+        self.assertGreater(details["dropped_context_chars"], 0)
+
+    def test_spoon_policy_preserves_durable_user_constraints(self) -> None:
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Goal:\n- Everything must be contained in index.html.\n- No frameworks.\n- Keep performance reasonable.",
+                    }
+                ],
+            },
+            {"type": "function_call_output", "call_id": "old", "output": "x" * 8000},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continue."}]},
+        ]
+
+        result = compile_responses_context(
+            input_items,
+            context_policy="spoon",
+            max_chars=4000,
+            recent_items=1,
+            tools=TOOLS,
+        )
+
+        self.assertIn("Durable user constraints", result.text)
+        self.assertIn("Everything must be contained in index.html.", result.text)
+        self.assertIn("No frameworks.", result.text)
+        self.assertIn("Keep performance reasonable.", result.text)
+
+    def test_spoon_policy_summarizes_large_recent_tool_output(self) -> None:
+        result = compile_responses_context(
+            [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Create index.html."}]},
+                {"type": "function_call_output", "call_id": "call_echo", "output": "<!DOCTYPE html>" + ("x" * 6000)},
+            ],
+            context_policy="spoon",
+            max_chars=4000,
+            recent_items=2,
+            tools=TOOLS,
+        )
+
+        self.assertIn("tool output call_echo chars=", result.text)
+        self.assertNotIn("x" * 1000, result.text)
+
+    def test_spoon_policy_keeps_failure_constraints(self) -> None:
+        input_items = [
+            {
+                "type": "function_call",
+                "name": "shell",
+                "call_id": "call_bad",
+                "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"cd glm-test && uv run playwright install chromium\"]}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_bad",
+                "output": "unsupported call: write_file\nFailed to spawn: playwright\n",
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continue."}]},
+        ]
+
+        result = compile_responses_context(
+            input_items,
+            context_policy="spoon",
+            max_chars=4000,
+            recent_items=1,
+            tools=TOOLS,
+        )
+
+        self.assertIn("PowerShell does not accept &&", result.text)
+        self.assertIn("workdir", result.text)
+        self.assertIn("Tool 'write_file' was unsupported", result.text)
+        self.assertIn("Playwright executable was unavailable", result.text)
+        self.assertIn("Continue.", result.text)
+
+    def test_proxy_error_response_is_completed_to_avoid_codex_retry_storms(self) -> None:
+        response = build_proxy_error_response(
+            {"model": "Qwen3-Coder-Next"},
+            599,
+            {"error": {"message": "Connection timed out", "type": "upstream_connection_error"}},
+        )
+
+        self.assertEqual(response["status"], "completed")
+        self.assertIsNone(response["error"])
+        self.assertIn("Do not retry the same route", response["output"][0]["content"][0]["text"])
 
 
 if __name__ == "__main__":

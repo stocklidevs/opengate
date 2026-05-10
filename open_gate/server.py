@@ -41,6 +41,9 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": "proxy" if self.server.config.get("upstream_base_url") else "capture",
                     "normalization_mode": self.server.config.get("normalization_mode", "repair"),
                     "upstream_input_mode": self.server.config.get("upstream_input_mode", "auto"),
+                    "context_policy": self.server.config.get("context_policy", "full"),
+                    "context_max_chars": self.server.config.get("context_max_chars"),
+                    "context_recent_items": self.server.config.get("context_recent_items"),
                     "stream_heartbeat_seconds": self.server.config.get("stream_heartbeat_seconds", 5.0),
                 }
             )
@@ -140,6 +143,9 @@ class Handler(BaseHTTPRequestHandler):
             timeout=float(self.server.config["upstream_timeout"]),
             normalization_mode=self.server.config["normalization_mode"],
             upstream_input_mode=self.server.config["upstream_input_mode"],
+            context_policy=self.server.config["context_policy"],
+            context_max_chars=int(self.server.config["context_max_chars"]),
+            context_recent_items=int(self.server.config["context_recent_items"]),
         )
 
     def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
@@ -436,10 +442,32 @@ def main() -> int:
         default="auto",
         help="auto flattens Responses history that vLLM rejects; native forwards input unchanged; flatten always sends a string transcript upstream.",
     )
+    parser.add_argument(
+        "--context-policy",
+        choices=["full", "spoon"],
+        default="full",
+        help="full sends the complete flattened transcript; spoon compacts older Codex history and keeps recent turns exact.",
+    )
+    parser.add_argument(
+        "--context-max-chars",
+        type=int,
+        default=60000,
+        help="Maximum flattened input characters sent upstream when --context-policy spoon is active.",
+    )
+    parser.add_argument(
+        "--context-recent-items",
+        type=int,
+        default=10,
+        help="Number of newest Responses input items kept exact when --context-policy spoon is active.",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
     if args.stream_heartbeat_seconds <= 0:
         parser.error("--stream-heartbeat-seconds must be greater than 0")
+    if args.context_max_chars < 4000:
+        parser.error("--context-max-chars must be at least 4000")
+    if args.context_recent_items < 1:
+        parser.error("--context-recent-items must be at least 1")
 
     config = {
         "capture_dir": args.capture_dir,
@@ -451,6 +479,9 @@ def main() -> int:
         "upstream_timeout": args.upstream_timeout,
         "normalization_mode": args.normalization_mode,
         "upstream_input_mode": args.upstream_input_mode,
+        "context_policy": args.context_policy,
+        "context_max_chars": args.context_max_chars,
+        "context_recent_items": args.context_recent_items,
         "stream_heartbeat_seconds": args.stream_heartbeat_seconds,
         "quiet": args.quiet,
     }

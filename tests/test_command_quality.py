@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from open_gate.command_quality import inspect_tool_calls, repair_shell_command_argument
+from open_gate.command_quality import inspect_tool_calls, repair_shell_arguments, repair_shell_command_argument
 from open_gate.linter import ToolCall
 
 
@@ -72,6 +72,25 @@ class CommandQualityTests(unittest.TestCase):
         self.assertIn("windows_powershell_chain_operator", {issue["issue"] for issue in issues})
         self.assertIn("relative_cd_without_workdir", {issue["issue"] for issue in issues})
 
+    def test_ignores_javascript_chain_operator_inside_here_string(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "$html = @'\n<script>if (active && ready) run();</script>\n'@; Set-Content index.html $html",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertNotIn("windows_powershell_chain_operator", {issue["issue"] for issue in issues})
+
     def test_detects_powershell_here_string_escape_misuse(self) -> None:
         call = ToolCall(
             name="shell",
@@ -84,6 +103,13 @@ class CommandQualityTests(unittest.TestCase):
         issues = inspect_tool_calls([call])
 
         self.assertEqual(issues[0]["issue"], "powershell_here_string_header")
+
+    def test_repairs_bad_powershell_here_string_header(self) -> None:
+        repaired = repair_shell_arguments(
+            {"command": ["powershell.exe", "-Command", "$script = @'`nimport asyncio`n'@"]}
+        )
+
+        self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "$script = @'\nimport asyncio\n'@"])
 
     def test_detects_python_compound_statement_one_liner(self) -> None:
         call = ToolCall(
@@ -145,6 +171,33 @@ class CommandQualityTests(unittest.TestCase):
         issues = inspect_tool_calls([call])
 
         self.assertEqual(issues[0]["issue"], "uv_run_playwright_entrypoint")
+
+    def test_detects_html_echo_without_file_write(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": ["powershell.exe", "-Command", "echo \"<!DOCTYPE html><html></html>\""]},
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertEqual(issues[0]["issue"], "html_echo_without_file_write")
+
+    def test_repairs_bash_heredoc_for_powershell(self) -> None:
+        repaired = repair_shell_arguments(
+            {
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "cat > \"index.html\" << 'EOF'\n<\"!DOCTYPE html>\n<html></html>\nEOF",
+                ]
+            }
+        )
+
+        self.assertIn("Set-Content -LiteralPath 'index.html'", repaired["command"][2])
+        self.assertIn("<!DOCTYPE html>", repaired["command"][2])
 
 
 if __name__ == "__main__":

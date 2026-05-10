@@ -7,4 +7,5 @@ logs/*.out
 logs/*.err
 runs/*.json
 runs/codex-live/
+runs/refero-spoon/
 runs/qwen-known-good/

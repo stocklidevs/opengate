@@ -141,6 +141,19 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
             }
         )
 
+    if contains_bash_heredoc(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "bash_heredoc_in_powershell",
+                "severity": "error",
+                "source": source,
+                "repairable": True,
+                "command": command,
+                "message": "Windows PowerShell does not support Bash heredoc syntax such as cat > file << EOF.",
+            }
+        )
+
     if contains_bad_here_string_header(script):
         issues.append(
             {
@@ -174,6 +187,18 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
                 "source": source,
                 "command": command,
                 "message": "uv run playwright assumes the Playwright console script is already installed; python -m playwright or installing the package first is more reliable.",
+            }
+        )
+
+    if contains_html_echo_without_file_write(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "html_echo_without_file_write",
+                "severity": "error",
+                "source": source,
+                "command": command,
+                "message": "The command appears to print an HTML document to stdout instead of writing index.html.",
             }
         )
 
@@ -265,12 +290,29 @@ def inspect_read_mcp_resource_arguments(arguments: JsonObject, source: str = "")
 
 
 def repair_shell_arguments(arguments: JsonObject) -> JsonObject | None:
-    command = arguments.get("command")
-    repaired_command = repair_shell_command_argument(command)
-    if repaired_command is None:
-        return None
     repaired = deepcopy(arguments)
-    repaired["command"] = repaired_command
+    command = repaired.get("command")
+    changed = False
+
+    repaired_command = repair_shell_command_argument(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        command = repaired_command
+        changed = True
+
+    repaired_command = repair_bad_here_string_command(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        changed = True
+        command = repaired_command
+
+    repaired_command = repair_bash_heredoc_command(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        changed = True
+
+    if not changed:
+        return None
     return repaired
 
 
@@ -290,6 +332,54 @@ def repair_shell_command_argument(command: Any) -> list[str] | None:
     if inner_script is None:
         return None
     return [*command[:2], inner_script, *command[3:]]
+
+
+def repair_bad_here_string_command(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not is_powershell_command_vector(command) or len(command) < 3:
+        return None
+    script = command[2]
+    if not contains_bad_here_string_header(script):
+        return None
+    repaired_script = script.replace("`r", "\r").replace("`n", "\n")
+    if repaired_script == script:
+        return None
+    return [*command[:2], repaired_script, *command[3:]]
+
+
+def repair_bash_heredoc_command(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not is_powershell_command_vector(command) or len(command) < 3:
+        return None
+    repaired_script = convert_bash_heredoc_to_powershell(command[2])
+    if repaired_script is None:
+        return None
+    return [*command[:2], repaired_script, *command[3:]]
+
+
+def convert_bash_heredoc_to_powershell(script: str) -> str | None:
+    lines = script.splitlines()
+    if len(lines) < 3:
+        return None
+    first = lines[0]
+    match = re.match(
+        r"^\s*(?:cat|type)\s*>\s*(?P<target>\"[^\"]+\"|'[^']+'|\S+)\s*<<\s*(?P<delim>\"[^\"]+\"|'[^']+'|\w+)\s*$",
+        first,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    delimiter = strip_outer_quotes(match.group("delim"))
+    if strip_outer_quotes(lines[-1].strip()) != delimiter:
+        return None
+    target = strip_outer_quotes(match.group("target"))
+    body = "\n".join(lines[1:-1])
+    body = re.sub(r"^<[\"']?!DOCTYPE", "<!DOCTYPE", body, count=1, flags=re.IGNORECASE)
+    if "\n'@\n" in f"\n{body}\n":
+        return None
+    return f"$html = @'\n{body}\n'@; Set-Content -LiteralPath '{target}' -Value $html -Encoding UTF8"
 
 
 def collapse_nested_powershell_array(command: list[str]) -> list[str] | None:
@@ -370,7 +460,16 @@ def is_windows_powershell_executable(value: str) -> bool:
 
 
 def contains_powershell_chain_operator(script: str) -> bool:
-    return bool(re.search(r"(?<!&)&&(?!&)", script))
+    return bool(re.search(r"(?<!&)&&(?!&)", strip_powershell_here_strings(script)))
+
+
+def strip_powershell_here_strings(script: str) -> str:
+    return re.sub(r"@(['\"])\r?\n.*?\r?\n\1@", "", script, flags=re.DOTALL)
+
+
+def contains_bash_heredoc(script: str) -> bool:
+    first_line = script.splitlines()[0] if script.splitlines() else script
+    return bool(re.search(r"\b(?:cat|type)\s*>\s*(?:\"[^\"]+\"|'[^']+'|\S+)\s*<<", first_line, re.IGNORECASE))
 
 
 def contains_bad_here_string_header(script: str) -> bool:
@@ -385,6 +484,14 @@ def contains_python_compound_one_liner(script: str) -> bool:
 
 def contains_uv_run_playwright(script: str) -> bool:
     return bool(re.search(r"\buv\s+run\s+playwright\b", script, re.IGNORECASE))
+
+
+def contains_html_echo_without_file_write(script: str) -> bool:
+    if "<!doctype html" not in script.lower() and "<html" not in script.lower():
+        return False
+    if not re.search(r"^\s*(?:echo|write-output)\b", script, re.IGNORECASE):
+        return False
+    return not re.search(r"(>\s*['\"]?[^;&|]*index\.html|set-content|out-file)", script, re.IGNORECASE)
 
 
 def relative_cd_targets(script: str) -> list[str]:

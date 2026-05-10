@@ -6,7 +6,11 @@ param(
     [string]$CaptureDir = "captures",
     [double]$StreamHeartbeatSeconds = 5.0,
     [ValidateSet("repair", "observe")]
-    [string]$Mode = "repair"
+    [string]$Mode = "repair",
+    [ValidateSet("full", "spoon")]
+    [string]$ContextPolicy = "full",
+    [int]$ContextMaxChars = 60000,
+    [int]$ContextRecentItems = 10
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,4 +24,7 @@ python -m open_gate.server `
     --capture-dir $CaptureDir `
     --upstream-base-url $UpstreamBaseUrl `
     --stream-heartbeat-seconds $StreamHeartbeatSeconds `
-    --normalization-mode $Mode
+    --normalization-mode $Mode `
+    --context-policy $ContextPolicy `
+    --context-max-chars $ContextMaxChars `
+    --context-recent-items $ContextRecentItems

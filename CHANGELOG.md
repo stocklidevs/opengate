@@ -8,6 +8,20 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.5.0 - 2026-05-10
+
+- Added `--context-policy spoon`, a budgeted context compiler for Codex Responses history before forwarding to vLLM.
+- Added context capture metadata for original flattened size, budgeted size, summarized items, exact recent items, and dropped context characters.
+- Added durable user-constraint extraction so requirements like `Everything must be contained in index.html` survive long compiled histories.
+- Added tool-failure constraint extraction so repeated Codex turns can carry compact reminders about unsupported tools, unavailable dependencies, bad PowerShell patterns, and timeouts.
+- Added repair for PowerShell here-string commands that use escaped `` `n`` after the here-string header.
+- Added command-quality detection for shell commands that print a full HTML document to stdout instead of writing `index.html`.
+- Added repair for Bash heredoc file writes emitted inside Windows PowerShell commands.
+- Fixed PowerShell `&&` detection so JavaScript `&&` inside a here-string is not reported as a shell chain operator.
+- Added large recent tool-output summarization and completed diagnostic responses for upstream failures to reduce Codex retry storms.
+- Added context-size fields to `open_gate.codex_report`.
+- Documented the spoon-feed mode for long interactive Codex runs against local open models.
+
 ## 0.4.0 - 2026-05-09
 
 - Added command-quality lint rules for Windows PowerShell chain operators, bad here-string headers, Python compound one-liners, relative `cd` usage, `uv run playwright`, non-image `view_image` paths, and skill files read as MCP resources.

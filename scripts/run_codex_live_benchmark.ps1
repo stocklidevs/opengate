@@ -6,6 +6,10 @@ param(
     [string]$Suite = "fixtures\codex_live\smoke.json",
     [ValidateSet("repair", "observe")]
     [string]$Mode = "repair",
+    [ValidateSet("full", "spoon")]
+    [string]$ContextPolicy = "full",
+    [int]$ContextMaxChars = 60000,
+    [int]$ContextRecentItems = 10,
     [int]$Runs = 1,
     [string]$Label = "codex_live_smoke",
     [string]$OutputRoot = "runs\codex-live",
@@ -22,6 +26,9 @@ $suiteJson = Get-Content -Raw -LiteralPath $suitePath.Path | ConvertFrom-Json
 if ($DryRun) {
     [ordered]@{
         mode = $Mode
+        context_policy = $ContextPolicy
+        context_max_chars = $ContextMaxChars
+        context_recent_items = $ContextRecentItems
         model = $Model
         upstream_base_url = $UpstreamBaseUrl
         codex_cwd = $CodexCwd
@@ -43,6 +50,9 @@ $manifest = [ordered]@{
     run_id = $runId
     created_at = (Get-Date).ToUniversalTime().ToString("o")
     mode = $Mode
+    context_policy = $ContextPolicy
+    context_max_chars = $ContextMaxChars
+    context_recent_items = $ContextRecentItems
     model = $Model
     upstream_base_url = $UpstreamBaseUrl
     codex_cwd = $CodexCwd
@@ -53,7 +63,7 @@ $manifest = [ordered]@{
 }
 
 $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems)
     Set-Location -LiteralPath $RootPath
     python -m open_gate `
         --host 127.0.0.1 `
@@ -62,8 +72,11 @@ $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
         --capture-dir $CapturePath `
         --upstream $Upstream `
         --normalization-mode $ProxyMode `
+        --context-policy $CtxPolicy `
+        --context-max-chars $CtxMaxChars `
+        --context-recent-items $CtxRecentItems `
         --quiet
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems
 
 try {
     Start-Sleep -Milliseconds 900

@@ -42,7 +42,15 @@ class CodexReportTests(unittest.TestCase):
                         },
                         "upstream": {
                             "status": 200,
-                            "transform": {"input_mode": "flattened", "reason": "unsupported_responses_history"},
+                            "transform": {
+                                "input_mode": "flattened",
+                                "reason": "unsupported_responses_history",
+                                "context_policy": "spoon",
+                                "flattened_chars": 900,
+                                "original_flattened_chars": 1900,
+                                "dropped_context_chars": 1000,
+                                "summarized_input_items": 2,
+                            },
                             "response": {
                                 "output": [
                                     {
@@ -87,6 +95,10 @@ class CodexReportTests(unittest.TestCase):
 
         self.assertEqual(report["summary"]["proxy_exchanges"], 1)
         self.assertEqual(report["summary"]["flattened_upstream_requests"], 1)
+        self.assertEqual(report["summary"]["spoon_context_requests"], 1)
+        self.assertEqual(report["summary"]["max_flattened_chars"], 900)
+        self.assertEqual(report["summary"]["max_original_flattened_chars"], 1900)
+        self.assertEqual(report["summary"]["dropped_context_chars"], 1000)
         self.assertEqual(report["summary"]["stream_heartbeats"], 2)
         self.assertEqual(report["summary"]["max_proxy_duration_seconds"], 12.5)
         self.assertEqual(report["summary"]["structured_argument_repairs"], 1)
