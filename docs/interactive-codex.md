@@ -66,7 +66,8 @@ Verified on 2026-05-09:
 Current proxy behavior:
 
 - Codex can send `stream: true`.
-- Open Gate buffers the upstream Qwen response with `stream: false`, normalizes it, then emits valid Responses SSE events to Codex.
+- Open Gate sends SSE headers immediately, emits heartbeat comments while Qwen/vLLM is generating, then emits valid Responses SSE events to Codex.
+- Open Gate still buffers the upstream Qwen response with `stream: false` so normalization can inspect the full response before Codex sees it.
 - Tool-call streaming includes `response.function_call_arguments.delta` and `response.function_call_arguments.done`.
 - Text streaming includes `response.output_text.delta` and `response.output_text.done`.
 

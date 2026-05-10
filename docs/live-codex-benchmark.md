@@ -18,6 +18,8 @@ Open Gate has two proxy modes:
 
 Open Gate also has an upstream input mode. The default, `auto`, forwards simple user turns natively and flattens richer Codex history before sending it to vLLM. This avoids vLLM 400 validation errors on assistant history, `function_call`, or `function_call_output` input items.
 
+For streamed Codex requests, Open Gate sends SSE headers immediately and emits keepalive comments while it waits for the buffered upstream response. Tune this with `--stream-heartbeat-seconds`; the default is `5.0`.
+
 Start the proxy manually:
 
 ```powershell
@@ -56,6 +58,8 @@ python -m open_gate.codex_report runs\codex-live\<run-id>\captures --codex-dir r
 - `upstream_command_quality_issues`: raw model command-shape problems.
 - `returned_command_quality_issues`: command-shape problems after Open Gate mode is applied.
 - `structured_argument_repairs`: repairs Open Gate applied or would apply.
+- `average_proxy_duration_seconds` and `max_proxy_duration_seconds`: upstream wait plus normalization time from proxy captures.
+- `stream_heartbeats`: keepalive comments sent while Codex waited for buffered upstream responses.
 - `returned_clean_capture_rate`: captures with no returned leaks, invalid calls, command-quality issues, or policy block markers.
 
 ## 2026-05-09 Qwen Validation

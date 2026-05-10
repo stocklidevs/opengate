@@ -5,13 +5,15 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 import time
 import uuid
 from typing import Any
 from urllib.parse import urlparse
 
 from .proxy import build_proxy_error_response, forward_responses_request
-from .streaming import response_stream_events
+from .streaming import response_stream_events, serialise_sse_comment
 
 
 JsonObject = dict[str, Any]
@@ -39,6 +41,7 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": "proxy" if self.server.config.get("upstream_base_url") else "capture",
                     "normalization_mode": self.server.config.get("normalization_mode", "repair"),
                     "upstream_input_mode": self.server.config.get("upstream_input_mode", "auto"),
+                    "stream_heartbeat_seconds": self.server.config.get("stream_heartbeat_seconds", 5.0),
                 }
             )
             return
@@ -78,7 +81,59 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": {"message": f"Unhandled path: {path}", "type": "not_found"}}, status=404)
 
     def _handle_proxy_response(self, path: str, body: JsonObject) -> None:
-        result = forward_responses_request(
+        if body.get("stream"):
+            self._handle_proxy_response_stream(path, body)
+            return
+
+        started_at = datetime.now(timezone.utc)
+        started_monotonic = time.monotonic()
+        result = self._forward_proxy_response(body)
+        timing = self._proxy_timing(started_at, started_monotonic, stream_heartbeats=0)
+        response, status = self._proxy_response_from_result(body, result)
+        self._capture_proxy_exchange(path, body, result, response, timing)
+        self._send_json(response, status=status)
+
+    def _handle_proxy_response_stream(self, path: str, body: JsonObject) -> None:
+        result_queue: Queue[tuple[str, Any]] = Queue(maxsize=1)
+        started_at = datetime.now(timezone.utc)
+        started_monotonic = time.monotonic()
+
+        def worker() -> None:
+            try:
+                result_queue.put(("result", self._forward_proxy_response(body)))
+            except Exception as exc:  # pragma: no cover - defensive guard around upstream adapters.
+                result_queue.put(("exception", exc))
+
+        Thread(target=worker, daemon=True).start()
+        self._start_sse_response()
+
+        heartbeats = 0
+        client_connected = True
+        heartbeat_seconds = float(self.server.config["stream_heartbeat_seconds"])
+        while True:
+            try:
+                kind, value = result_queue.get(timeout=heartbeat_seconds)
+                break
+            except Empty:
+                heartbeats += 1
+                if client_connected:
+                    client_connected = self._write_sse_comment(f"open-gate waiting for upstream heartbeat={heartbeats}")
+
+        timing = self._proxy_timing(started_at, started_monotonic, stream_heartbeats=heartbeats)
+        if kind == "exception":
+            upstream_response = {"error": {"message": str(value), "type": value.__class__.__name__}}
+            response = build_proxy_error_response(body, 599, upstream_response)
+            self._capture_proxy_exception(path, body, upstream_response, response, timing)
+        else:
+            result = value
+            response, _status = self._proxy_response_from_result(body, result)
+            self._capture_proxy_exchange(path, body, result, response, timing)
+
+        if client_connected:
+            self._write_response_events(response)
+
+    def _forward_proxy_response(self, body: JsonObject) -> Any:
+        return forward_responses_request(
             request_body=body,
             upstream_base_url=self.server.config["upstream_base_url"],
             api_key=self.server.config["upstream_api_key"],
@@ -86,11 +141,32 @@ class Handler(BaseHTTPRequestHandler):
             normalization_mode=self.server.config["normalization_mode"],
             upstream_input_mode=self.server.config["upstream_input_mode"],
         )
+
+    def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
+        completed_at = datetime.now(timezone.utc)
+        return {
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_seconds": round(time.monotonic() - started_monotonic, 3),
+            "stream_heartbeats": stream_heartbeats,
+        }
+
+    def _proxy_response_from_result(self, body: JsonObject, result: Any) -> tuple[JsonObject, int]:
         response = result.returned_response
         status = 200
         if result.upstream_status >= 400:
             response = build_proxy_error_response(body, result.upstream_status, result.upstream_response)
             status = 502
+        return response, status
+
+    def _capture_proxy_exchange(
+        self,
+        path: str,
+        body: JsonObject,
+        result: Any,
+        response: JsonObject,
+        timing: JsonObject,
+    ) -> None:
         self._capture_record(
             {
                 "kind": "proxy_exchange",
@@ -99,6 +175,7 @@ class Handler(BaseHTTPRequestHandler):
                 "client": self.client_address[0],
                 "headers": self._safe_headers(),
                 "request": body,
+                "timing": timing,
                 "upstream": {
                     "base_url": self.server.config["upstream_base_url"],
                     "status": result.upstream_status,
@@ -113,10 +190,38 @@ class Handler(BaseHTTPRequestHandler):
             },
             prefix="proxy",
         )
-        if body.get("stream") and status == 200:
-            self._stream_response_generic(response)
-        else:
-            self._send_json(response, status=status)
+
+    def _capture_proxy_exception(
+        self,
+        path: str,
+        body: JsonObject,
+        upstream_response: JsonObject,
+        response: JsonObject,
+        timing: JsonObject,
+    ) -> None:
+        self._capture_record(
+            {
+                "kind": "proxy_exchange",
+                "method": self.command,
+                "path": path,
+                "client": self.client_address[0],
+                "headers": self._safe_headers(),
+                "request": body,
+                "timing": timing,
+                "upstream": {
+                    "base_url": self.server.config["upstream_base_url"],
+                    "status": 599,
+                    "request": None,
+                    "transform": None,
+                    "response": upstream_response,
+                },
+                "normalization_mode": self.server.config["normalization_mode"],
+                "normalization": {"mode": self.server.config["normalization_mode"], "error": upstream_response["error"]},
+                "normalized_response": response,
+                "response": response,
+            },
+            prefix="proxy",
+        )
 
     def log_message(self, fmt: str, *args: Any) -> None:
         if self.server.config.get("quiet"):
@@ -173,12 +278,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _stream_response(self, response: JsonObject, text: str) -> None:
+    def _start_sse_response(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.end_headers()
+
+    def _stream_response(self, response: JsonObject, text: str) -> None:
+        self._start_sse_response()
 
         resp_id = response["id"]
         item = response["output"][0]
@@ -202,20 +310,15 @@ class Handler(BaseHTTPRequestHandler):
             self._write_sse(event["type"], event)
 
     def _stream_response_generic(self, response: JsonObject) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        self._start_sse_response()
+        self._write_response_events(response)
+
+    def _write_response_events(self, response: JsonObject) -> None:
         for event_name, payload in response_stream_events(response):
             self._write_sse(event_name, payload)
 
     def _stream_chat_completion(self, request: JsonObject, text: str) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        self._start_sse_response()
         model = request.get("model") or self.server.config["model"]
         chunk_id = f"chatcmpl_og_{uuid.uuid4().hex}"
         chunk = {
@@ -242,6 +345,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: {event_name}\n".encode("utf-8"))
         self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
         self.wfile.flush()
+
+    def _write_sse_comment(self, comment: str) -> bool:
+        try:
+            self.wfile.write(serialise_sse_comment(comment))
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            return False
 
 
 def build_response(request: JsonObject, text: str, default_model: str) -> JsonObject:
@@ -312,6 +423,7 @@ def main() -> int:
     parser.add_argument("--upstream-base-url", "--upstream", dest="upstream_base_url", help="Forward /v1/responses to this OpenAI-compatible upstream base URL.")
     parser.add_argument("--upstream-api-key", default="sk-no-key-required")
     parser.add_argument("--upstream-timeout", type=float, default=120.0)
+    parser.add_argument("--stream-heartbeat-seconds", type=float, default=5.0, help="Seconds between SSE keepalive comments while waiting for a buffered upstream response.")
     parser.add_argument(
         "--normalization-mode",
         choices=["repair", "observe"],
@@ -326,6 +438,8 @@ def main() -> int:
     )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
+    if args.stream_heartbeat_seconds <= 0:
+        parser.error("--stream-heartbeat-seconds must be greater than 0")
 
     config = {
         "capture_dir": args.capture_dir,
@@ -337,6 +451,7 @@ def main() -> int:
         "upstream_timeout": args.upstream_timeout,
         "normalization_mode": args.normalization_mode,
         "upstream_input_mode": args.upstream_input_mode,
+        "stream_heartbeat_seconds": args.stream_heartbeat_seconds,
         "quiet": args.quiet,
     }
     server = CaptureServer((args.host, args.port), Handler, config)

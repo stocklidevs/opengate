@@ -8,6 +8,10 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.3.0 - 2026-05-09
+
+- Added SSE heartbeat comments for streamed Codex requests while Open Gate waits on buffered upstream vLLM responses.
+- Added proxy timing metadata and live-report summary fields for request duration and heartbeat counts.
 - Added automatic upstream input flattening for vLLM `/v1/responses` requests that contain Codex assistant history, function calls, or tool outputs.
 - Added reporting for flattened upstream requests.
 

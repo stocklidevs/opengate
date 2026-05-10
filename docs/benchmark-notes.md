@@ -65,13 +65,13 @@ Key failure cases:
 
 ## First Proxy Baseline
 
-Open Gate buffered proxy mode was checked on 2026-05-09 with:
+Open Gate buffered-upstream proxy mode was checked on 2026-05-09 with:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File C:\Users\example\source\repos\open-gate\scripts\run_proxy_benchmark.ps1 -Runs 3 -Label qwen_open_gate_serious_r3 -Output runs\qwen_open_gate_serious_r3.json
 ```
 
-The proxy forwards `/v1/responses` to direct Qwen/vLLM with `stream: false`, normalizes the upstream response, and returns a Responses-shaped result. It currently handles:
+The proxy forwards `/v1/responses` to direct Qwen/vLLM with `stream: false`, normalizes the upstream response, and returns a Responses-shaped result. For interactive Codex streams, it sends SSE heartbeat comments while waiting for that buffered upstream response. It currently handles:
 
 - Stripping leaked tool syntax from assistant text.
 - Promoting parseable leaked tool calls into structured `function_call` items when the prompt does not indicate no-tool/documentation intent.
@@ -96,7 +96,7 @@ Raw Qwen vs Open Gate on `qwen_serious_tool_stress`, 60 requests each:
 | Invalid tool calls | 4/60, 6.67% | 0/60, 0% |
 | HTTP errors | 0/60, 0% | 0/60, 0% |
 
-This is still a benchmark-scope result, not a complete interactive Codex guarantee. The next hardening step is streaming proxy mode with the same normalization guarantees.
+This began as a benchmark-scope result. The interactive proxy now keeps streamed Codex sockets alive with heartbeat comments while preserving the same normalization guarantee.
 
 Newer reports also include `command_quality_issues_rate`. This metric catches structured tool calls that parse as JSON but are likely to be rejected by Codex policy. Older saved reports in `runs\` predate this metric.
 

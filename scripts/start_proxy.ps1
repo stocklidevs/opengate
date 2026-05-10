@@ -4,6 +4,7 @@ param(
     [string]$UpstreamBaseUrl = "http://127.0.0.1:8001/v1",
     [string]$Model = "Qwen3-Coder-Next",
     [string]$CaptureDir = "captures",
+    [double]$StreamHeartbeatSeconds = 5.0,
     [ValidateSet("repair", "observe")]
     [string]$Mode = "repair"
 )
@@ -18,4 +19,5 @@ python -m open_gate.server `
     --model $Model `
     --capture-dir $CaptureDir `
     --upstream-base-url $UpstreamBaseUrl `
+    --stream-heartbeat-seconds $StreamHeartbeatSeconds `
     --normalization-mode $Mode

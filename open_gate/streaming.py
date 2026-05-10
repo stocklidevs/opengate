@@ -66,7 +66,8 @@ def response_stream_events(response: JsonObject) -> list[tuple[str, JsonObject]]
 
     completed = deepcopy(response)
     completed["status"] = completed.get("status") or "completed"
-    events.append(("response.completed", {"type": "response.completed", "sequence_number": seq, "response": completed}))
+    terminal_event = "response.failed" if completed["status"] == "failed" else "response.completed"
+    events.append((terminal_event, {"type": terminal_event, "sequence_number": seq, "response": completed}))
     return events
 
 
@@ -77,6 +78,11 @@ def serialise_sse(events: Iterable[tuple[str, JsonObject]]) -> bytes:
         chunks.append(f"event: {event_name}\n".encode("utf-8"))
         chunks.append(f"data: {data}\n\n".encode("utf-8"))
     return b"".join(chunks)
+
+
+def serialise_sse_comment(comment: str) -> bytes:
+    lines = comment.replace("\r", "\n").splitlines() or [""]
+    return b"".join(f": {line}\n".encode("utf-8") for line in lines) + b"\n"
 
 
 def normalise_response_for_stream(response: JsonObject) -> JsonObject:

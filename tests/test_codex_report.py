@@ -22,6 +22,10 @@ class CodexReportTests(unittest.TestCase):
                         "captured_at": "2026-05-09T00:00:00+00:00",
                         "kind": "proxy_exchange",
                         "normalization_mode": "repair",
+                        "timing": {
+                            "duration_seconds": 12.5,
+                            "stream_heartbeats": 2,
+                        },
                         "request": {
                             "stream": True,
                             "tools": [
@@ -83,6 +87,8 @@ class CodexReportTests(unittest.TestCase):
 
         self.assertEqual(report["summary"]["proxy_exchanges"], 1)
         self.assertEqual(report["summary"]["flattened_upstream_requests"], 1)
+        self.assertEqual(report["summary"]["stream_heartbeats"], 2)
+        self.assertEqual(report["summary"]["max_proxy_duration_seconds"], 12.5)
         self.assertEqual(report["summary"]["structured_argument_repairs"], 1)
         self.assertEqual(report["summary"]["returned_command_quality_issues"], 0)
         self.assertEqual(report["summary"]["codex_turns_completed"], 1)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from open_gate.streaming import response_stream_events, serialise_sse
+from open_gate.streaming import response_stream_events, serialise_sse, serialise_sse_comment
 
 
 class StreamingTests(unittest.TestCase):
@@ -58,6 +58,17 @@ class StreamingTests(unittest.TestCase):
         self.assertIn(b"data: ", raw)
         first_data = raw.split(b"data: ", 1)[1].split(b"\n\n", 1)[0]
         self.assertEqual(json.loads(first_data)["type"], "response.created")
+
+    def test_serialise_sse_comment_outputs_comment_frame(self) -> None:
+        raw = serialise_sse_comment("open-gate waiting")
+
+        self.assertEqual(raw, b": open-gate waiting\n\n")
+
+    def test_failed_response_stream_ends_with_failed_event(self) -> None:
+        events = response_stream_events({"id": "resp_failed", "status": "failed", "output": []})
+
+        self.assertEqual(events[-1][0], "response.failed")
+        self.assertEqual(events[-1][1]["type"], "response.failed")
 
 
 if __name__ == "__main__":

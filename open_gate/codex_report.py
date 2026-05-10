@@ -71,6 +71,7 @@ def summarize_capture(path: Path) -> JsonObject:
     returned_response = capture.get("response") if isinstance(capture.get("response"), dict) else {}
     normalized_response = capture.get("normalized_response") if isinstance(capture.get("normalized_response"), dict) else returned_response
     normalization = capture.get("normalization") if isinstance(capture.get("normalization"), dict) else {}
+    timing = capture.get("timing") if isinstance(capture.get("timing"), dict) else {}
     raw_text = json.dumps(capture, ensure_ascii=True)
 
     upstream_analysis = analyze_response(upstream_response, tools)
@@ -84,6 +85,8 @@ def summarize_capture(path: Path) -> JsonObject:
         "upstream_input_mode": upstream_transform.get("input_mode"),
         "upstream_input_transform_reason": upstream_transform.get("reason"),
         "upstream_status": upstream.get("status"),
+        "duration_seconds": timing.get("duration_seconds"),
+        "stream_heartbeats": timing.get("stream_heartbeats"),
         "request_stream": bool(request.get("stream")),
         "blocked_by_policy": "blocked by policy" in raw_text.lower(),
         "repairs": len(normalization.get("structured_argument_repairs") or []),
@@ -170,11 +173,15 @@ def summarize_codex_jsonl(path: Path) -> JsonObject:
 def summarize(captures: list[JsonObject], codex_runs: list[JsonObject]) -> JsonObject:
     total_captures = len(captures)
     total_codex = len(codex_runs)
+    durations = [float(item["duration_seconds"]) for item in captures if isinstance(item.get("duration_seconds"), int | float)]
     return {
         "proxy_exchanges": total_captures,
         "upstream_errors": sum(1 for item in captures if item.get("upstream_status") and item["upstream_status"] >= 400),
         "captures_with_repairs": sum(1 for item in captures if item.get("repairs")),
         "flattened_upstream_requests": sum(1 for item in captures if item.get("upstream_input_mode") == "flattened"),
+        "stream_heartbeats": sum(int(item.get("stream_heartbeats") or 0) for item in captures),
+        "average_proxy_duration_seconds": round(sum(durations) / len(durations), 3) if durations else 0.0,
+        "max_proxy_duration_seconds": round(max(durations), 3) if durations else 0.0,
         "structured_argument_repairs": sum(int(item.get("repairs") or 0) for item in captures),
         "stripped_text_items": sum(int(item.get("stripped_text_items") or 0) for item in captures),
         "promoted_tool_calls": sum(int(item.get("promoted_tool_calls") or 0) for item in captures),
