@@ -1,6 +1,14 @@
 # Open Gate
 
-![Version](https://img.shields.io/badge/version-0.5.0-blue)
+<p align="center">
+  <img src="img/open_gate_poster.png" alt="Open Gate poster showing a gateway for local open coding models and Codex CLI" width="920">
+</p>
+
+<p align="center">
+  <strong>Make local open coding models behave inside Codex CLI.</strong>
+</p>
+
+![Version](https://img.shields.io/badge/version-0.6.2-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![API](https://img.shields.io/badge/API-Responses-111827)
 ![Proxy Modes](https://img.shields.io/badge/proxy-repair%20%7C%20observe-16A34A)
@@ -9,7 +17,7 @@
 
 Open Gate is a local harness and proxy for making open coding models behave like a Responses API agent backend for Codex. It captures real Codex traffic, detects tool-call leakage, repairs common open-model tool-call failures, and produces repeatable baseline reports that other home-lab users can compare.
 
-Current release: `0.5.0`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
+Current release: `0.6.2`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
 
 ## Current Shape
 
@@ -18,11 +26,14 @@ Current release: `0.5.0`. See `CHANGELOG.md` for release notes and `docs\release
 - Proxy mode supports `--normalization-mode repair` and `--normalization-mode observe`.
 - Proxy mode defaults to `--upstream-input-mode auto`, which flattens multi-turn Codex Responses history when vLLM rejects native item types.
 - Proxy mode supports `--context-policy spoon`, which compacts older Codex history, keeps recent turns exact, and carries forward concise constraints from prior tool failures.
+- Proxy mode injects compact tool-discipline guardrails before upstream generation, including the exact callable tool list and explicit warnings against invented aliases such as `web_search`, `write_file`, and `apply_patch`.
+- Proxy mode defaults to request-diet `auto` policies, digesting oversized Codex instructions and compacting oversized tool schemas before forwarding to vLLM.
 - Streamed proxy requests emit SSE heartbeat comments while waiting for vLLM, then replay the normalized response as Responses SSE events.
 - Every request is written to `captures/` with sensitive headers redacted.
-- `open_gate.linter` extracts leaked tool calls from XML tags, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
-- `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex, including nested PowerShell, Windows PowerShell `&&`, bad here-strings, fragile Python one-liners, and non-image `view_image` paths.
+- `open_gate.linter` extracts leaked tool calls from XML tags, GLM `<arg_key>/<arg_value>` tags, bare `recipient_name=functions.*` headers, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
+- `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex, including nested PowerShell, Windows PowerShell `&&`, bad here-strings, fragile Python one-liners, full-page web fetches, and non-image `view_image` paths.
 - `open_gate.regression` replays captured upstream responses through normalization as stable fixtures.
+- `open_gate.adversarial` fuzzes malformed GLM-style tag whitespace through the full proxy normalizer to catch leakage slips before live Codex runs.
 - `open_gate.codex_report` summarizes live Codex JSONL output and proxy captures.
 - Fixtures in `fixtures/leaks/` model common bad outputs from open-model tool-call formats.
 
@@ -55,7 +66,9 @@ python -m open_gate `
   --upstream-input-mode auto `
   --context-policy spoon `
   --context-max-chars 60000 `
-  --context-recent-items 10
+  --context-recent-items 10 `
+  --instruction-policy auto `
+  --tool-schema-policy auto
 ```
 
 See `docs\context-policy.md` for the spoon-feed compiler and its capture metrics.
@@ -111,11 +124,11 @@ python -m open_gate.inspect_capture --pretty
 python -m open_gate.lint fixtures\leaks\qwen_xml_tool_call.txt --tools fixtures\tools\codex_like_tools.json --pretty
 ```
 
-The lint output includes `command_quality_issues` for tool calls that are syntactically structured but operationally suspicious. This catches failures like `cd glm-test && ...` under Windows PowerShell, `uv run playwright ...` before Playwright is installed, or `view_image` pointed at a directory. See `docs\tool-call-linter.md`.
+The lint output includes `command_quality_issues` for tool calls that are syntactically structured but operationally suspicious. This catches failures like `cd glm-test && ...` under Windows PowerShell, full-page `Invoke-WebRequest` HTML dumps, `uv run playwright ...` before Playwright is installed, or `view_image` pointed at a directory. See `docs\tool-call-linter.md`.
 
 ## Benchmark Tool Calls
 
-The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. Full setup notes are in `docs\vllm-notes.md`.
+The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. The first GLM baseline used `zai-org/GLM-4.7-Flash` as `GLM-4.7-Flash`. Full setup notes are in `docs\vllm-notes.md`.
 
 Run a raw baseline against the GX10 vLLM server:
 
@@ -141,7 +154,9 @@ Run the same benchmark through Open Gate proxy mode:
 powershell.exe -ExecutionPolicy Bypass -File C:\Users\example\source\repos\open-gate\scripts\run_proxy_benchmark.ps1
 ```
 
-Direct Qwen scored `43/60` strict successes on the serious suite. The first Open Gate proxy baseline scored `60/60` on the same suite. See `docs\benchmark-notes.md`.
+The proxy benchmark runner starts a fresh local Open Gate process, verifies `/health` metadata for the requested model and context policy, refuses to reuse an occupied port, and stores captures under `runs\<label>\captures`.
+
+Direct Qwen scored `43/60` strict successes on the serious suite. The first Open Gate proxy baseline scored `60/60` on the same suite. Direct GLM-4.7-Flash scored `2/20` strict successes on the first serious baseline and leaked tool syntax in `18/20` cases. Open Gate `0.6.0` repairs that GLM dialect: `repair/full` scored `20/20`, and `repair/spoon` scored `19/20` with zero leaks. See `docs\benchmark-notes.md`.
 
 For interactive Codex usage, see `docs\interactive-codex.md`.
 
@@ -221,15 +236,22 @@ The first real fixture locks in the nested PowerShell repair seen during interac
 
 ```powershell
 python -m unittest discover -s tests
+python -m open_gate.adversarial --iterations 300 --seed 6047
 python -m open_gate.regression --pretty
+```
+
+For pre-release or model-adaptation work, run the looped local gate:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_validation_loop.ps1 -Loops 3 -AdversarialIterations 300
 ```
 
 The first Codex capture showed `POST /v1/responses` with `stream: true`, three input messages, and ten tools. See `docs/codex-capture-notes.md`.
 
 ## Versioning
 
-Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.5.0`.
+Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.6.2`.
 
 ## Next Milestone
 
-The next step is to adapt a second model using `docs\model-adaptation-checklist.md`, then compare its raw, observe, and repair reports against the Qwen3-Coder-Next known-good baseline.
+The next step is to adapt a third model with the same process: direct baseline, observe capture, repair benchmark, then add only model-agnostic recovery rules when the captures prove a repeatable failure shape.

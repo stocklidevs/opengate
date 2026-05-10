@@ -1,6 +1,9 @@
 # Benchmark Notes
 
-Checked on 2026-05-09 against direct vLLM at `http://127.0.0.1:8001/v1`.
+Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
+
+- Qwen3-Coder-Next checked on 2026-05-09.
+- GLM-4.7-Flash checked on 2026-05-10.
 
 ## Suites
 
@@ -9,6 +12,7 @@ Checked on 2026-05-09 against direct vLLM at `http://127.0.0.1:8001/v1`.
 - 3 simple Codex-like cases.
 - Expected behavior: structured `shell` or `update_plan` calls.
 - One run against direct Qwen/vLLM: 3/3 strict successes.
+- Three runs against direct GLM-4.7-Flash/vLLM: 0/9 strict successes.
 
 `fixtures/benchmarks/codex_tool_leak_stress.json`
 
@@ -16,6 +20,7 @@ Checked on 2026-05-09 against direct vLLM at `http://127.0.0.1:8001/v1`.
 - One run against direct Qwen/vLLM: 3/4 strict successes.
 - No tool syntax leaked into text.
 - One case embedded `recipient_name`/`functions.shell` strings inside the structured `update_plan` arguments, counted as `argument_leak`.
+- Three runs against direct GLM-4.7-Flash/vLLM: 0/12 strict successes, with text leakage in 12/12 cases.
 
 ## Current Interpretation
 
@@ -62,6 +67,60 @@ Key failure cases:
 - `no_tool_xml_example_bait`: failed 3/3 by converting documentation requests into actual tool calls.
 - `schema_string_command_bait`: failed 2/3 with invalid tool arguments.
 - `schema_extra_commentary_arg_bait`: failed 2/3 with invalid tool arguments.
+
+## Raw Model Comparison
+
+These are direct vLLM results before Open Gate repairs. Run counts differ because Qwen was established first and GLM is the new adaptation target.
+
+| Suite | Model | Runs | Strict Success | Text Leaks | Reasoning Leaks | Missed Tool Calls | Invalid Tool Calls | HTTP Errors |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `codex_shell_smoke` | Qwen3-Coder-Next | 1 | 3/3, 100% | 0/3, 0% | 0/3, 0% | 0/3, 0% | 0/3, 0% | 0/3, 0% |
+| `codex_shell_smoke` | GLM-4.7-Flash | 3 | 0/9, 0% | 6/9, 66.67% | 0/9, 0% | 9/9, 100% | 0/9, 0% | 0/9, 0% |
+| `codex_tool_leak_stress` | Qwen3-Coder-Next | 1 | 3/4, 75% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% |
+| `codex_tool_leak_stress` | GLM-4.7-Flash | 3 | 0/12, 0% | 12/12, 100% | 1/12, 8.33% | 12/12, 100% | 0/12, 0% | 0/12, 0% |
+| `qwen_serious_tool_stress` | Qwen3-Coder-Next | 3 | 43/60, 71.67% | 10/60, 16.67% | 0/60, 0% | not recorded | 4/60, 6.67% | 0/60, 0% |
+| `qwen_serious_tool_stress` | GLM-4.7-Flash | 1 | 2/20, 10% | 17/20, 85% | 5/20, 25% | 15/20, 75% | 1/20, 5% | 0/20, 0% |
+
+## GLM-4.7-Flash Direct Baseline
+
+The GLM endpoint was served as `GLM-4.7-Flash` from `zai-org/GLM-4.7-Flash` with vLLM `max_model_len` 131072, `--tool-call-parser glm47`, and `--reasoning-parser glm45`. Full serving notes are in `docs\vllm-notes.md`.
+
+Report files:
+
+- `runs\glm47_flash_direct_smoke_r3.json`
+- `runs\glm47_flash_direct_leak_stress_r3.json`
+- `runs\glm47_flash_direct_serious_r1.json`
+
+Overall direct-GLM result:
+
+- Smoke suite: 0/9 strict successes, 6/9 text leaks, 9/9 missed structured tool calls.
+- Leak-stress suite: 0/12 strict successes, 12/12 text leaks, 12/12 missed structured tool calls.
+- Serious suite: 2/20 strict successes, 18/20 leaks, 15/20 missed tool calls, 3/20 over-eager tool calls, 1/20 invalid tool calls.
+
+Open Gate GLM validation on `qwen_serious_tool_stress`:
+
+| Mode | Context Policy | Strict Success | Text Leaks | Reasoning Leaks | Proxy Recoverable | Missed Tool Calls | Invalid Tool Calls |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| direct vLLM | n/a | 2/20, 10% | 17/20, 85% | 5/20, 25% | 0/20, 0% | 15/20, 75% | 1/20, 5% |
+| Open Gate `repair` before GLM text parser | `full` | 2/20, 10% | 16/20, 80% | 9/20, 45% | 0/20, 0% | 13/20, 65% | 0/20, 0% |
+| Open Gate `repair` before GLM text parser | `spoon` | 2/20, 10% | 15/20, 75% | 8/20, 40% | 2/20, 10% | 13/20, 65% | 1/20, 5% |
+| Open Gate `0.6.0 repair` | `full` | 20/20, 100% | 0/20, 0% | 0/20, 0% | 0/20, 0% | 0/20, 0% | 0/20, 0% |
+| Open Gate `0.6.0 repair` | `spoon` | 19/20, 95% | 0/20, 0% | 0/20, 0% | 0/20, 0% | 1/20, 5% | 0/20, 0% |
+
+Open Gate `0.6.0` solves the repeatable GLM leakage shape without requiring the user to name the model. The linter recognizes GLM's XML-ish mini-format, promotes parseable leaked calls into Responses `function_call` items, repairs schema-cleanable arguments, and scrubs residual raw syntax from assistant and reasoning text.
+
+The dominant raw failure was not HTTP or vLLM rejection. GLM returned HTTP 200, but emitted tool calls as assistant text, for example:
+
+```text
+<tool_call>shell<arg_key>command</arg_key>...
+```
+
+That shape was not converted by vLLM into Responses `function_call` items, so Codex-style clients saw leaked assistant text rather than executable tool calls. The `repair/full` result is now the preferred GLM setting for this synthetic suite. `repair/spoon` is still useful for long live Codex histories, but on this short synthetic suite it missed one case where GLM emitted an incomplete fenced JSON `tool_calls` block; Open Gate deliberately does not infer a tool call from incomplete JSON.
+
+Final GLM report files:
+
+- `runs\glm47_flash_open_gate_repair_glm_tags_v3_r1.json`
+- `runs\glm47_flash_open_gate_repair_spoon_glm_tags_v4_r1.json`
 
 ## First Proxy Baseline
 

@@ -17,6 +17,13 @@ These failures should be measured separately from JSON leakage:
 
 ## Current Rules
 
+The leakage parser recognizes:
+
+- XML-ish `<tool_call>` and `<tool_calls>` blocks, including GLM `<arg_key>/<arg_value>` payloads.
+- Bare `recipient_name=functions.*` response headers.
+- Fenced or raw JSON tool-call objects and arrays when they parse cleanly.
+- Pythonic `functions.tool({...})` text.
+
 The linter currently reports:
 
 - `nested_powershell`: `powershell.exe -Command` wrapped inside another PowerShell `-Command`.
@@ -24,6 +31,7 @@ The linter currently reports:
 - `powershell_here_string_header`: a here-string header followed by escaped `` `n `` text instead of a real newline.
 - `python_compound_statement_one_liner`: `python -c` with compound statements such as `async def` packed after semicolons.
 - `uv_run_playwright_entrypoint`: `uv run playwright ...` before the Playwright console script is known to exist.
+- `unbounded_web_fetch`: full-page web fetches that print whole HTML content into the model context.
 - `relative_cd_without_workdir`: inline relative `cd` instead of the shell tool's `workdir`.
 - `nested_relative_cd`: inline `cd` into the same directory already provided as `workdir`.
 - `view_image_non_image_path`: `view_image` pointed at a path without a known image extension.
@@ -45,3 +53,17 @@ python -m open_gate.lint fixtures\leaks\qwen_xml_tool_call.txt --tools fixtures\
 ```
 
 The output includes `command_quality_issues` next to parsed leaked tool calls.
+
+## Adversarial Validation
+
+GLM can split XML-ish tag names across whitespace, for example `<tool_ca ll>` or `</ arg_key>`. The adversarial validator creates deterministic whitespace mutations of GLM-style tool calls and runs them through the full proxy normalizer:
+
+```powershell
+python -m open_gate.adversarial --iterations 300 --seed 6047
+```
+
+For broader local checks, run the validation loop:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_validation_loop.ps1 -Loops 3 -AdversarialIterations 300
+```

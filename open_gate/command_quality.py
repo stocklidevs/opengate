@@ -202,6 +202,18 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
             }
         )
 
+    if contains_unbounded_web_fetch(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "unbounded_web_fetch",
+                "severity": "warning",
+                "source": source,
+                "command": command,
+                "message": "The command appears to fetch and print a whole web page; prefer bounded metadata or a small excerpt.",
+            }
+        )
+
     workdir = arguments.get("workdir")
     for target in relative_cd_targets(script):
         if isinstance(workdir, str) and path_last_segment(workdir).lower() == path_last_segment(target).lower():
@@ -492,6 +504,21 @@ def contains_html_echo_without_file_write(script: str) -> bool:
     if not re.search(r"^\s*(?:echo|write-output)\b", script, re.IGNORECASE):
         return False
     return not re.search(r"(>\s*['\"]?[^;&|]*index\.html|set-content|out-file)", script, re.IGNORECASE)
+
+
+def contains_unbounded_web_fetch(script: str) -> bool:
+    lowered = script.lower()
+    if "http://" not in lowered and "https://" not in lowered:
+        return False
+    if re.search(r"\binvoke-webrequest\b", script, re.IGNORECASE):
+        if re.search(r"select-object\s+-expandproperty\s+content", script, re.IGNORECASE):
+            return True
+        if re.search(r"\.(?:content|rawcontent)\b", script, re.IGNORECASE):
+            return True
+    if re.search(r"\b(?:curl|wget|iwr)\b", script, re.IGNORECASE):
+        if not re.search(r"\b(?:head|range|first|totalcount|select-object\s+-first|select-string)\b", script, re.IGNORECASE):
+            return True
+    return False
 
 
 def relative_cd_targets(script: str) -> list[str]:

@@ -185,6 +185,25 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertEqual(issues[0]["issue"], "html_echo_without_file_write")
 
+    def test_detects_unbounded_web_fetch(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing | Select-Object -ExpandProperty Content",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("unbounded_web_fetch", {issue["issue"] for issue in issues})
+
     def test_repairs_bash_heredoc_for_powershell(self) -> None:
         repaired = repair_shell_arguments(
             {

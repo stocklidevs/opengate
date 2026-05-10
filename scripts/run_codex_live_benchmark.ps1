@@ -10,6 +10,10 @@ param(
     [string]$ContextPolicy = "full",
     [int]$ContextMaxChars = 60000,
     [int]$ContextRecentItems = 10,
+    [ValidateSet("full", "auto", "digest")]
+    [string]$InstructionPolicy = "auto",
+    [ValidateSet("full", "auto", "compact")]
+    [string]$ToolSchemaPolicy = "auto",
     [int]$Runs = 1,
     [string]$Label = "codex_live_smoke",
     [string]$OutputRoot = "runs\codex-live",
@@ -29,6 +33,8 @@ if ($DryRun) {
         context_policy = $ContextPolicy
         context_max_chars = $ContextMaxChars
         context_recent_items = $ContextRecentItems
+        instruction_policy = $InstructionPolicy
+        tool_schema_policy = $ToolSchemaPolicy
         model = $Model
         upstream_base_url = $UpstreamBaseUrl
         codex_cwd = $CodexCwd
@@ -53,6 +59,8 @@ $manifest = [ordered]@{
     context_policy = $ContextPolicy
     context_max_chars = $ContextMaxChars
     context_recent_items = $ContextRecentItems
+    instruction_policy = $InstructionPolicy
+    tool_schema_policy = $ToolSchemaPolicy
     model = $Model
     upstream_base_url = $UpstreamBaseUrl
     codex_cwd = $CodexCwd
@@ -63,7 +71,7 @@ $manifest = [ordered]@{
 }
 
 $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy)
     Set-Location -LiteralPath $RootPath
     python -m open_gate `
         --host 127.0.0.1 `
@@ -75,8 +83,10 @@ $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
         --context-policy $CtxPolicy `
         --context-max-chars $CtxMaxChars `
         --context-recent-items $CtxRecentItems `
+        --instruction-policy $InstrPolicy `
+        --tool-schema-policy $SchemaPolicy `
         --quiet
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy
 
 try {
     Start-Sleep -Milliseconds 900

@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from open_gate.proxy import (
+    apply_request_diet,
     build_proxy_error_response,
     compile_responses_context,
     forward_responses_request,
@@ -68,6 +69,157 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertEqual(normalized["output"][0]["name"], "shell")
         self.assertEqual(details["promoted_tool_calls"][0]["name"], "shell")
+
+    def test_promotes_glm_tool_call_tag(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["powershell.exe", "-Command", "Get-ChildItem -Force"]</arg_value><arg_key>workdir</arg_key><arg_value>C:\\Users\\example\\source\\repos\\glm-test</arg_value></tool_call>',
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the workspace with shell."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertEqual(details["promoted_tool_calls"][0]["source"], "glm_tool_call_tag")
+        self.assertEqual(details["stripped_text_items"], 1)
+
+    def test_promotes_top_level_glm_output_text(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [],
+            "output_text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["powershell.exe", "-Command", "Get-Location"]</arg_value></tool_call>',
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Run shell."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertEqual(normalized["output_text"], "")
+        self.assertEqual(details["promoted_tool_calls"][0]["source"], "glm_tool_call_tag")
+
+    def test_repairs_and_promotes_glm_string_command_tag(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>Get-ChildItem -Force</arg_value><arg_key>workdir</arg_key><arg_value>C:\\Users\\example\\source\\repos\\glm-test</arg_value></tool_call>',
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("List files with shell."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(
+            normalized["output"][0]["arguments"],
+            "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem -Force\"],\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}",
+        )
+        self.assertEqual(details["text_tool_call_repairs"][0]["tool"], "shell")
+        self.assertEqual(details["promoted_tool_calls"][0]["arguments"]["command"][0], "powershell.exe")
+
+    def test_repairs_glm_extra_argument_before_promotion(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["Get-ChildItem"]</arg_value><arg_key>recipient_name</arg_key><arg_value>functions.shell</arg_value></tool_call>',
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("List files with shell."))
+        arguments = normalized["output"][0]["arguments"]
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertIn("\"command\":[\"Get-ChildItem\"]", arguments)
+        self.assertNotIn("recipient_name", arguments)
+        self.assertEqual(details["promoted_tool_calls"][0]["arguments"], {"command": ["Get-ChildItem"]})
+
+    def test_strips_reasoning_glm_tool_call_without_promoting(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "reasoning_test",
+                    "type": "reasoning",
+                    "content": [
+                        {
+                            "type": "reasoning_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["powershell.exe", "-Command", "Get-Location"]</arg_value></tool_call>',
+                        }
+                    ],
+                },
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done."}],
+                },
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Run shell."))
+
+        self.assertEqual(normalized["output"][0]["content"][0]["text"], "")
+        self.assertEqual(normalized["output"][1]["type"], "message")
+        self.assertEqual(details["promoted_tool_calls"], [])
+        self.assertEqual(details["stripped_text_items"], 1)
+
+    def test_glm_documentation_tool_call_tag_is_stripped_not_promoted(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["powershell.exe", "-Command", "Get-ChildItem -Force"]</arg_value></tool_call>',
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request("Without using tools, show a sample <tool_call> for documentation only."),
+        )
+
+        self.assertEqual(normalized["output"][0]["type"], "message")
+        self.assertEqual(normalized["output"][0]["content"][0]["text"], "")
+        self.assertEqual(details["promoted_tool_calls"], [])
+        self.assertEqual(details["promotion_block_reason"], "negative_tool_intent")
 
     def test_no_tool_documentation_leak_is_stripped_not_promoted(self) -> None:
         response = {
@@ -221,6 +373,7 @@ class ProxyNormalizationTests(unittest.TestCase):
     def test_auto_transform_flattens_unsupported_codex_history(self) -> None:
         request = {
             "model": "Qwen3-Coder-Next",
+            "tools": TOOLS,
             "input": [
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Create a file."}]},
                 {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I will patch it."}]},
@@ -233,8 +386,55 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         self.assertEqual(details["input_mode"], "flattened")
         self.assertIsInstance(request["input"], str)
+        self.assertTrue(details["tool_guardrails_injected"])
+        self.assertIn("Open Gate tool discipline", request["input"])
+        self.assertIn("web_search", request["input"])
         self.assertIn("assistant tool call apply_patch call_1", request["input"])
         self.assertIn("tool output call_1", request["input"])
+
+    def test_native_transform_injects_tool_guardrails(self) -> None:
+        request = {
+            "model": "GLM-4.7-Flash",
+            "tools": TOOLS,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "Existing instructions."}],
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Look at a URL."}]},
+            ],
+        }
+
+        details = transform_upstream_request(request, "auto")
+
+        self.assertEqual(details["input_mode"], "native")
+        self.assertTrue(details["tool_guardrails_injected"])
+        self.assertEqual(request["input"][1]["role"], "developer")
+        guard_text = request["input"][1]["content"][0]["text"]
+        self.assertIn("Open Gate tool discipline", guard_text)
+        self.assertIn("The only callable tools", guard_text)
+        self.assertIn("web_search", guard_text)
+        self.assertIn("There is no web_search/browser tool here", guard_text)
+
+    def test_native_transform_does_not_duplicate_tool_guardrails(self) -> None:
+        request = {
+            "model": "GLM-4.7-Flash",
+            "tools": TOOLS,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "Open Gate tool discipline:\n- Already present."}],
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continue."}]},
+            ],
+        }
+
+        details = transform_upstream_request(request, "auto")
+
+        self.assertFalse(details["tool_guardrails_injected"])
+        self.assertEqual(len(request["input"]), 2)
 
     def test_spoon_policy_forces_flattening_and_compacts_history(self) -> None:
         request = {
@@ -348,6 +548,90 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertIn("Tool 'write_file' was unsupported", result.text)
         self.assertIn("Playwright executable was unavailable", result.text)
         self.assertIn("Continue.", result.text)
+
+    def test_request_diet_digests_large_instructions_and_tools(self) -> None:
+        request = {
+            "model": "GLM-4.7-Flash",
+            "instructions": "Codex instructions. " * 900,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "shell",
+                    "description": "Run shell commands. " * 1000,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "array",
+                                "description": "Command arguments. " * 500,
+                                "items": {"type": "string", "description": "One argument. " * 200},
+                            }
+                        },
+                        "required": ["command"],
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+            "input": "Create index.html.",
+        }
+
+        details = apply_request_diet(request, instruction_policy="auto", tool_schema_policy="auto")
+
+        self.assertTrue(details["instruction_diet_applied"])
+        self.assertTrue(details["tool_schema_diet_applied"])
+        self.assertLess(details["instructions_sent_chars"], details["instructions_original_chars"])
+        self.assertLess(details["tools_sent_chars"], details["tools_original_chars"])
+        self.assertTrue(request["instructions"].startswith("Open Gate instruction digest"))
+        self.assertLessEqual(len(request["tools"][0]["description"]), 220)
+        command_schema = request["tools"][0]["parameters"]["properties"]["command"]
+        self.assertLessEqual(len(command_schema["description"]), 120)
+        self.assertEqual(command_schema["items"]["type"], "string")
+
+    def test_transform_applies_request_diet_after_spooning(self) -> None:
+        request = {
+            "model": "GLM-4.7-Flash",
+            "instructions": "Large instruction block. " * 900,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "shell",
+                    "description": "Run shell commands. " * 1000,
+                    "parameters": TOOLS[0]["parameters"],
+                }
+            ],
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Create index.html."}]},
+                {"type": "function_call_output", "call_id": "call_web", "output": "<!DOCTYPE html>" + ("x" * 10000)},
+            ],
+        }
+
+        details = transform_upstream_request(request, "auto", context_policy="spoon", context_max_chars=60000)
+
+        self.assertEqual(details["input_mode"], "flattened")
+        self.assertTrue(details["instruction_diet_applied"])
+        self.assertTrue(details["tool_schema_diet_applied"])
+        self.assertLess(details["upstream_body_chars"], details["instructions_original_chars"] + details["tools_original_chars"] + 12000)
+        self.assertIn("Open Gate context digest", request["input"])
+        self.assertNotIn("x" * 1000, request["input"])
+
+    def test_timeout_returns_proxy_result_with_transformed_request(self) -> None:
+        request = self.request("Run a slow command.")
+        request["instructions"] = "Large instruction block. " * 900
+
+        with patch("open_gate.proxy.urlopen", side_effect=TimeoutError("timed out")):
+            result = forward_responses_request(
+                request_body=request,
+                upstream_base_url="http://upstream.invalid/v1",
+                api_key="sk-test",
+                timeout=0.01,
+                normalization_mode="repair",
+            )
+
+        self.assertEqual(result.upstream_status, 599)
+        self.assertEqual(result.upstream_response["error"]["type"], "TimeoutError")
+        self.assertIsNotNone(result.upstream_request)
+        self.assertIsNotNone(result.upstream_transform)
+        self.assertTrue(result.upstream_transform["instruction_diet_applied"])
 
     def test_proxy_error_response_is_completed_to_avoid_codex_retry_storms(self) -> None:
         response = build_proxy_error_response(

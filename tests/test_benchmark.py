@@ -61,6 +61,28 @@ class BenchmarkScoringTests(unittest.TestCase):
         self.assertTrue(score["leaked"])
         self.assertTrue(score["proxy_recoverable"])
 
+    def test_glm_leaked_tool_call_is_proxy_recoverable(self) -> None:
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["powershell.exe", "-Command", "Get-ChildItem -Force"]</arg_value></tool_call>',
+                        }
+                    ],
+                }
+            ]
+        }
+
+        score = score_response(response, TOOLS, {"expected_tool": "shell"}, "responses")
+
+        self.assertFalse(score["strict_success"])
+        self.assertTrue(score["leaked"])
+        self.assertTrue(score["proxy_recoverable"])
+        self.assertEqual(score["leaked_tool_names"], ["shell"])
+
     def test_tool_syntax_inside_arguments_is_not_strict_success(self) -> None:
         response = {
             "output": [

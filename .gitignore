@@ -6,6 +6,8 @@ logs/*.log
 logs/*.out
 logs/*.err
 runs/*.json
+runs/*/captures/
 runs/codex-live/
+runs/glm47-flash/
 runs/refero-spoon/
 runs/qwen-known-good/

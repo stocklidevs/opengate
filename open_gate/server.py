@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from .proxy import build_proxy_error_response, forward_responses_request
 from .streaming import response_stream_events, serialise_sse_comment
+from .version import __version__
 
 
 JsonObject = dict[str, Any]
@@ -38,13 +39,18 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "open-gate",
+                    "version": __version__,
+                    "model": self.server.config.get("model"),
                     "mode": "proxy" if self.server.config.get("upstream_base_url") else "capture",
                     "normalization_mode": self.server.config.get("normalization_mode", "repair"),
                     "upstream_input_mode": self.server.config.get("upstream_input_mode", "auto"),
                     "context_policy": self.server.config.get("context_policy", "full"),
                     "context_max_chars": self.server.config.get("context_max_chars"),
                     "context_recent_items": self.server.config.get("context_recent_items"),
+                    "instruction_policy": self.server.config.get("instruction_policy", "auto"),
+                    "tool_schema_policy": self.server.config.get("tool_schema_policy", "auto"),
                     "stream_heartbeat_seconds": self.server.config.get("stream_heartbeat_seconds", 5.0),
+                    "capture_dir": self.server.config.get("capture_dir"),
                 }
             )
             return
@@ -146,6 +152,8 @@ class Handler(BaseHTTPRequestHandler):
             context_policy=self.server.config["context_policy"],
             context_max_chars=int(self.server.config["context_max_chars"]),
             context_recent_items=int(self.server.config["context_recent_items"]),
+            instruction_policy=self.server.config["instruction_policy"],
+            tool_schema_policy=self.server.config["tool_schema_policy"],
         )
 
     def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
@@ -460,6 +468,18 @@ def main() -> int:
         default=10,
         help="Number of newest Responses input items kept exact when --context-policy spoon is active.",
     )
+    parser.add_argument(
+        "--instruction-policy",
+        choices=["full", "auto", "digest"],
+        default="auto",
+        help="full forwards Codex instructions unchanged; auto/digest replace oversized instructions with an Open Gate digest.",
+    )
+    parser.add_argument(
+        "--tool-schema-policy",
+        choices=["full", "auto", "compact"],
+        default="auto",
+        help="full forwards tool schemas unchanged; auto/compact trim oversized schema descriptions before forwarding upstream.",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
     if args.stream_heartbeat_seconds <= 0:
@@ -482,6 +502,8 @@ def main() -> int:
         "context_policy": args.context_policy,
         "context_max_chars": args.context_max_chars,
         "context_recent_items": args.context_recent_items,
+        "instruction_policy": args.instruction_policy,
+        "tool_schema_policy": args.tool_schema_policy,
         "stream_heartbeat_seconds": args.stream_heartbeat_seconds,
         "quiet": args.quiet,
     }

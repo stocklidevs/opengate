@@ -32,11 +32,17 @@ NEGATIVE_TOOL_INTENT = (
     "example",
 )
 CONTEXT_POLICIES = {"full", "spoon"}
+INSTRUCTION_POLICIES = {"full", "auto", "digest"}
+TOOL_SCHEMA_POLICIES = {"full", "auto", "compact"}
 DEFAULT_CONTEXT_MAX_CHARS = 60000
 DEFAULT_CONTEXT_RECENT_ITEMS = 10
+DEFAULT_INSTRUCTION_DIGEST_THRESHOLD = 12000
+DEFAULT_TOOL_SCHEMA_COMPACT_THRESHOLD = 16000
 CONTEXT_OUTPUT_PREVIEW_CHARS = 900
 CONTEXT_SUMMARY_PREVIEW_CHARS = 500
 CONTEXT_RECENT_TOOL_OUTPUT_MAX_CHARS = 1600
+TOOL_DESCRIPTION_MAX_CHARS = 220
+SCHEMA_DESCRIPTION_MAX_CHARS = 120
 IMPORTANT_OUTPUT_RE = re.compile(
     r"(error|failed|exception|traceback|timed out|timeout|not recognized|unsupported call|winerror|permission denied|"
     r"no such file|cannot find|failed to spawn)",
@@ -53,7 +59,22 @@ COMMAND_ISSUE_HINTS = {
     "skill_file_as_mcp_resource": "Codex skills are local instruction files, not MCP resources.",
     "html_echo_without_file_write": "Do not print a full HTML document to stdout; write the content to index.html.",
     "bash_heredoc_in_powershell": "Do not use Bash heredoc syntax in PowerShell; use a PowerShell here-string and Set-Content.",
+    "unbounded_web_fetch": "Do not fetch or print a whole web page into context; use metadata, title, headings, or a small bounded excerpt.",
 }
+TOOL_GUARDRAIL_MARKER = "Open Gate tool discipline:"
+COMMON_UNAVAILABLE_TOOL_ALIASES = (
+    "web_search",
+    "browser",
+    "browse",
+    "fetch",
+    "http",
+    "read",
+    "read_file",
+    "write",
+    "write_file",
+    "edit",
+    "apply_patch",
+)
 
 
 @dataclass
@@ -65,6 +86,14 @@ class ProxyResult:
     normalized_response: JsonObject
     returned_response: JsonObject
     normalization: JsonObject
+
+
+@dataclass
+class TextSlot:
+    container: JsonObject
+    key: str
+    text: str
+    allow_promotion: bool
 
 
 @dataclass
@@ -83,6 +112,8 @@ def forward_responses_request(
     context_policy: str = "full",
     context_max_chars: int = DEFAULT_CONTEXT_MAX_CHARS,
     context_recent_items: int = DEFAULT_CONTEXT_RECENT_ITEMS,
+    instruction_policy: str = "auto",
+    tool_schema_policy: str = "auto",
 ) -> ProxyResult:
     if normalization_mode not in {"repair", "observe"}:
         raise ValueError(f"Unsupported normalization mode: {normalization_mode}")
@@ -90,6 +121,10 @@ def forward_responses_request(
         raise ValueError(f"Unsupported upstream input mode: {upstream_input_mode}")
     if context_policy not in CONTEXT_POLICIES:
         raise ValueError(f"Unsupported context policy: {context_policy}")
+    if instruction_policy not in INSTRUCTION_POLICIES:
+        raise ValueError(f"Unsupported instruction policy: {instruction_policy}")
+    if tool_schema_policy not in TOOL_SCHEMA_POLICIES:
+        raise ValueError(f"Unsupported tool schema policy: {tool_schema_policy}")
     upstream_request = deepcopy(request_body)
     requested_stream = bool(upstream_request.get("stream"))
     upstream_request["stream"] = False
@@ -99,6 +134,8 @@ def forward_responses_request(
         context_policy=context_policy,
         context_max_chars=context_max_chars,
         context_recent_items=context_recent_items,
+        instruction_policy=instruction_policy,
+        tool_schema_policy=tool_schema_policy,
     )
     status, upstream_response = post_json(upstream_base_url, "/responses", upstream_request, api_key, timeout)
     normalized_response, normalization = normalize_responses_response(upstream_response, request_body)
@@ -124,9 +161,12 @@ def transform_upstream_request(
     context_policy: str = "full",
     context_max_chars: int = DEFAULT_CONTEXT_MAX_CHARS,
     context_recent_items: int = DEFAULT_CONTEXT_RECENT_ITEMS,
+    instruction_policy: str = "auto",
+    tool_schema_policy: str = "auto",
 ) -> JsonObject:
     original_input = request_body.get("input")
     needs_flattening = needs_flattened_input(original_input)
+    tools = request_body.get("tools") if isinstance(request_body.get("tools"), list) else []
     context_forces_flatten = (
         upstream_input_mode == "auto" and context_policy == "spoon" and isinstance(original_input, list)
     )
@@ -134,11 +174,19 @@ def transform_upstream_request(
         upstream_input_mode == "auto" and (needs_flattening or context_forces_flatten)
     )
     if not should_flatten:
+        guardrail = inject_tool_guardrails(request_body, tools)
+        diet = apply_request_diet(
+            request_body,
+            instruction_policy=instruction_policy,
+            tool_schema_policy=tool_schema_policy,
+        )
         return {
             "input_mode": "native",
             "reason": "compatible_input" if upstream_input_mode == "auto" else "forced_native",
             "context_policy": context_policy,
             "original_input_items": len(original_input) if isinstance(original_input, list) else None,
+            **guardrail,
+            **diet,
         }
 
     compiled = compile_responses_context(
@@ -146,9 +194,18 @@ def transform_upstream_request(
         context_policy=context_policy,
         max_chars=context_max_chars,
         recent_items=context_recent_items,
-        tools=request_body.get("tools") if isinstance(request_body.get("tools"), list) else [],
+        tools=tools,
     )
     request_body["input"] = compiled.text
+    if context_policy == "spoon":
+        guardrail = {"tool_guardrails_injected": False, "tool_guardrails_reason": "covered_by_spoon_header"}
+    else:
+        guardrail = inject_tool_guardrails(request_body, tools)
+    diet = apply_request_diet(
+        request_body,
+        instruction_policy=instruction_policy,
+        tool_schema_policy=tool_schema_policy,
+    )
     reason = "forced_flatten"
     if upstream_input_mode == "auto":
         reason = "unsupported_responses_history" if needs_flattening else "context_policy_spoon"
@@ -157,7 +214,182 @@ def transform_upstream_request(
         "reason": reason,
         "original_input_items": len(original_input) if isinstance(original_input, list) else None,
         **compiled.metadata,
+        **guardrail,
+        **diet,
     }
+
+
+def inject_tool_guardrails(request_body: JsonObject, tools: list[JsonObject]) -> JsonObject:
+    guardrail = build_tool_guardrail_text(tools)
+    if not guardrail:
+        return {"tool_guardrails_injected": False}
+    input_value = request_body.get("input")
+    if isinstance(input_value, str):
+        if TOOL_GUARDRAIL_MARKER in input_value:
+            return {"tool_guardrails_injected": False, "tool_guardrails_reason": "already_present"}
+        request_body["input"] = f"{guardrail}\n\n{input_value}"
+        return {"tool_guardrails_injected": True, "tool_guardrails_format": "text"}
+    if isinstance(input_value, list):
+        if any(isinstance(item, dict) and TOOL_GUARDRAIL_MARKER in flatten_input_item(item) for item in input_value):
+            return {"tool_guardrails_injected": False, "tool_guardrails_reason": "already_present"}
+        insert_at = leading_instruction_count(input_value)
+        input_value.insert(
+            insert_at,
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": guardrail}],
+            },
+        )
+        return {"tool_guardrails_injected": True, "tool_guardrails_format": "message"}
+    return {"tool_guardrails_injected": False, "tool_guardrails_reason": "unsupported_input"}
+
+
+def leading_instruction_count(input_items: list[Any]) -> int:
+    index = 0
+    for item in input_items:
+        if not isinstance(item, dict):
+            break
+        if item.get("type") != "message" or item.get("role") not in {"developer", "system"}:
+            break
+        index += 1
+    return index
+
+
+def build_tool_guardrail_text(tools: list[JsonObject]) -> str:
+    tool_names = available_tool_names(tools)
+    if not tool_names:
+        return ""
+    unavailable = [name for name in COMMON_UNAVAILABLE_TOOL_ALIASES if name not in tool_names]
+    lines = [
+        TOOL_GUARDRAIL_MARKER,
+        f"- The only callable tools in this request are: {', '.join(tool_names)}.",
+        "- If a tool name is not in that exact list, do not call it and do not print a raw tool-call tag for it.",
+        "- Use structured tool calls only; never emit XML/JSON/function-call syntax as assistant text or reasoning.",
+    ]
+    if unavailable:
+        lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
+    if "web_search" not in tool_names:
+        lines.append("- There is no web_search/browser tool here. For external URLs, make at most one small shell-based inspection if shell is listed; otherwise proceed from the prompt.")
+    if "shell" in tool_names:
+        lines.append("- When using shell on Windows, keep commands small and direct, and prefer the workdir argument over inline cd.")
+    return "\n".join(lines)
+
+
+def apply_request_diet(
+    request_body: JsonObject,
+    instruction_policy: str = "auto",
+    tool_schema_policy: str = "auto",
+) -> JsonObject:
+    metadata: JsonObject = {
+        "instruction_policy": instruction_policy,
+        "tool_schema_policy": tool_schema_policy,
+        "instruction_diet_applied": False,
+        "tool_schema_diet_applied": False,
+    }
+
+    instructions = request_body.get("instructions")
+    if isinstance(instructions, str):
+        metadata["instructions_original_chars"] = len(instructions)
+        should_digest = instruction_policy == "digest" or (
+            instruction_policy == "auto" and len(instructions) > DEFAULT_INSTRUCTION_DIGEST_THRESHOLD
+        )
+        if should_digest:
+            request_body["instructions"] = build_instruction_digest(instructions)
+            metadata["instruction_diet_applied"] = True
+        metadata["instructions_sent_chars"] = len(request_body.get("instructions") or "")
+
+    tools = request_body.get("tools")
+    if isinstance(tools, list):
+        original_tools_chars = json_size(tools)
+        metadata["tools_original_chars"] = original_tools_chars
+        should_compact = tool_schema_policy == "compact" or (
+            tool_schema_policy == "auto" and original_tools_chars > DEFAULT_TOOL_SCHEMA_COMPACT_THRESHOLD
+        )
+        if should_compact:
+            request_body["tools"] = compact_tool_schemas(tools)
+            metadata["tool_schema_diet_applied"] = True
+        metadata["tools_sent_chars"] = json_size(request_body.get("tools"))
+
+    metadata["upstream_body_chars"] = json_size(request_body)
+    return metadata
+
+
+def build_instruction_digest(_instructions: str) -> str:
+    return "\n".join(
+        [
+            "Open Gate instruction digest:",
+            "- You are a concise coding agent running inside Codex CLI.",
+            "- Follow the latest user task, developer messages, environment context, and tool schemas.",
+            "- Use only structured tool calls with advertised tool names and exact argument shapes.",
+            "- Never print raw tool-call XML, JSON tool_calls arrays, recipient_name syntax, or function-call text.",
+            "- Prefer small direct steps, update plans only when useful, and avoid loops after failures.",
+            "- Respect sandbox and approval information in the request context.",
+            "- When creating files, write the requested artifact directly instead of dumping large content to stdout.",
+        ]
+    )
+
+
+def compact_tool_schemas(tools: list[Any]) -> list[Any]:
+    return [compact_tool_schema(tool) for tool in tools]
+
+
+def compact_tool_schema(tool: Any) -> Any:
+    if not isinstance(tool, dict):
+        return tool
+    compacted: JsonObject = {}
+    for key in ("type", "name", "strict"):
+        if key in tool:
+            compacted[key] = deepcopy(tool[key])
+    if isinstance(tool.get("description"), str):
+        compacted["description"] = compact_one_line(tool["description"], TOOL_DESCRIPTION_MAX_CHARS)
+    if "parameters" in tool:
+        compacted["parameters"] = compact_json_schema(tool.get("parameters"))
+    if isinstance(tool.get("function"), dict):
+        compacted["function"] = compact_tool_schema(tool["function"])
+    for key, value in tool.items():
+        if key not in compacted and key not in {"description", "parameters", "function"}:
+            if key in {"required", "additionalProperties", "enum"}:
+                compacted[key] = deepcopy(value)
+    return compacted
+
+
+def compact_json_schema(schema: Any) -> Any:
+    if isinstance(schema, list):
+        return [compact_json_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return deepcopy(schema)
+    compacted: JsonObject = {}
+    preferred = (
+        "type",
+        "required",
+        "additionalProperties",
+        "enum",
+        "const",
+        "default",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "format",
+    )
+    for key in preferred:
+        if key in schema:
+            compacted[key] = deepcopy(schema[key])
+    if isinstance(schema.get("description"), str):
+        compacted["description"] = compact_one_line(schema["description"], SCHEMA_DESCRIPTION_MAX_CHARS)
+    if isinstance(schema.get("properties"), dict):
+        compacted["properties"] = {
+            str(key): compact_json_schema(value) for key, value in schema["properties"].items()
+        }
+    for key in ("items", "oneOf", "anyOf", "allOf"):
+        if key in schema:
+            compacted[key] = compact_json_schema(schema[key])
+    return compacted
+
+
+def json_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=True, separators=(",", ":"), default=str))
 
 
 def needs_flattened_input(input_value: Any) -> bool:
@@ -305,17 +537,24 @@ def build_spoon_header(
     constraints: list[str],
 ) -> str:
     tool_names = available_tool_names(tools)
+    unavailable = [name for name in COMMON_UNAVAILABLE_TOOL_ALIASES if name not in tool_names]
     lines = [
         "Open Gate context digest:",
         f"- Policy: spoon; original items={item_count}; summarized earlier items={older_count}; exact recent items={recent_count}.",
         f"- Original flattened size={original_chars} chars; budget={max_chars} chars.",
         "- Use only the provided tool schemas and exact argument shapes. If a tool name is not listed below, do not call it.",
+        "- Use structured tool calls only; never emit XML/JSON/function-call syntax as assistant text or reasoning.",
         "- Prefer small targeted tool calls. For file changes, use compact shell commands unless an edit-specific tool is explicitly listed.",
         "- For external URLs, make at most one lightweight inspection attempt; if unavailable, proceed from the prompt instead of researching in loops.",
+        "- For web page inspection, fetch only metadata, title, headings, or a small bounded excerpt; do not print full HTML into context.",
         "- If site access, network access, or a dependency failed earlier, adapt from available context instead of repeating the same failing route.",
     ]
     if tool_names:
         lines.append(f"- Available tool names include: {', '.join(tool_names[:24])}.")
+        if unavailable:
+            lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
+        if "web_search" not in tool_names:
+            lines.append("- There is no web_search/browser tool here. For external URLs, use at most one small shell-based inspection if shell is listed; otherwise proceed from the prompt.")
         if "apply_patch" not in tool_names:
             lines.append("- apply_patch is not available in this Codex session; do not call it.")
         if "write" not in tool_names:
@@ -454,6 +693,8 @@ def constraints_from_tool_output(output: str) -> list[str]:
         constraints.append("The Playwright executable was unavailable; avoid retrying the same playwright command unless the dependency is installed.")
     if "timed out" in lowered or "timeout" in lowered:
         constraints.append("A previous operation timed out; keep the next tool call smaller and more direct.")
+    if "unbounded_web_fetch" in lowered or "whole web page" in lowered:
+        constraints.append("Avoid fetching or printing a whole web page; use metadata, title, headings, or a small bounded excerpt.")
     if "not recognized as the name of" in lowered:
         constraints.append("A shell command was not recognized; verify commands before relying on them.")
     return constraints
@@ -582,6 +823,9 @@ def post_json(base_url: str, path: str, body: JsonObject, api_key: str, timeout:
         return exc.code, parsed
     except URLError as exc:
         return 599, {"error": {"message": f"Connection failed: {exc.reason}", "type": "upstream_connection_error"}}
+    except TimeoutError as exc:
+        message = str(exc) or "timed out"
+        return 599, {"error": {"message": message, "type": "TimeoutError"}}
 
 
 def normalize_responses_response(response: JsonObject, original_request: JsonObject) -> tuple[JsonObject, JsonObject]:
@@ -590,22 +834,36 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
     upstream_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
     repairs = repair_structured_calls(normalized, tools)
     suppressed = suppress_structured_calls_if_blocked(normalized, original_request)
-    text_items = collect_message_text_items(normalized)
+    text_slots = collect_response_text_slots(normalized)
     existing_calls = collect_existing_function_calls(normalized)
     promoted: list[ToolCall] = []
     stripped = 0
     invalid_calls: list[JsonObject] = []
+    text_candidate_repairs: list[JsonObject] = []
+    seen_candidates: set[str] = set()
+    seen_invalid: set[str] = set()
 
-    for item, content_part, text in text_items:
-        report = analyze_text(text, tools)
+    for slot in text_slots:
+        report = analyze_text(slot.text, tools)
         if report.tool_calls or report.leaks:
             stripped += 1
-            content_part["text"] = report.cleaned_text
+            slot.container[slot.key] = report.cleaned_text
+        if not slot.allow_promotion:
+            continue
         for call in report.tool_calls:
-            if call.valid:
-                promoted.append(call)
+            repaired_call, candidate_repairs = repair_text_tool_call_candidate(call, tools)
+            if candidate_repairs:
+                text_candidate_repairs.extend(candidate_repairs)
+            if repaired_call.valid:
+                key = tool_call_candidate_key(repaired_call)
+                if key not in seen_candidates:
+                    seen_candidates.add(key)
+                    promoted.append(repaired_call)
             else:
-                invalid_calls.append(call.to_json())
+                key = tool_call_candidate_key(repaired_call)
+                if key not in seen_invalid:
+                    seen_invalid.add(key)
+                    invalid_calls.append(repaired_call.to_json())
 
     should_promote = bool(promoted and not existing_calls and should_promote_tool_calls(original_request))
     if should_promote:
@@ -613,12 +871,14 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         output[:] = [item for item in output if not is_empty_message(item)]
         for call in promoted:
             output.append(build_function_call_item(call))
+        repairs.extend(repair_structured_calls(normalized, tools))
     normalized_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
 
     normalization = {
         "normalized_at": datetime.now(timezone.utc).isoformat(),
         "suppressed_structured_calls": suppressed,
         "structured_argument_repairs": repairs,
+        "text_tool_call_repairs": text_candidate_repairs,
         "upstream_command_quality_issues": upstream_command_quality_issues,
         "normalized_command_quality_issues": normalized_command_quality_issues,
         "stripped_text_items": stripped,
@@ -632,17 +892,62 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
     return normalized, normalization
 
 
-def collect_message_text_items(response: JsonObject) -> list[tuple[JsonObject, JsonObject, str]]:
-    out: list[tuple[JsonObject, JsonObject, str]] = []
+def collect_response_text_slots(response: JsonObject) -> list[TextSlot]:
+    out: list[TextSlot] = []
     for item in response.get("output") or []:
-        if not isinstance(item, dict) or item.get("type") != "message":
+        if not isinstance(item, dict):
             continue
+        item_type = item.get("type")
+        if item_type not in ("message", "reasoning"):
+            continue
+        allow_promotion = item_type == "message"
         for part in item.get("content") or []:
             if not isinstance(part, dict):
                 continue
-            if part.get("type") in ("output_text", "text") and isinstance(part.get("text"), str):
-                out.append((item, part, part["text"]))
+            if part.get("type") in ("output_text", "reasoning_text", "text") and isinstance(part.get("text"), str):
+                out.append(TextSlot(part, "text", part["text"], allow_promotion=allow_promotion))
+    if isinstance(response.get("output_text"), str):
+        out.append(TextSlot(response, "output_text", response["output_text"], allow_promotion=True))
     return out
+
+
+def repair_text_tool_call_candidate(call: ToolCall, tools: list[JsonObject]) -> tuple[ToolCall, list[JsonObject]]:
+    temp = {"output": [build_function_call_item(call)]}
+    repairs = repair_structured_calls(temp, tools)
+    if not repairs:
+        return call, []
+
+    repaired_call = ToolCall(
+        name=call.name,
+        arguments=parse_function_call_arguments(temp["output"][0]),
+        source=call.source,
+        span=call.span,
+        raw=call.raw,
+    )
+    validated = analyze_text(json.dumps({"tool": repaired_call.name, "arguments": repaired_call.arguments}), tools)
+    if validated.tool_calls:
+        repaired_call.valid = validated.tool_calls[0].valid
+        repaired_call.errors = list(validated.tool_calls[0].errors)
+    return repaired_call, [{"source": call.source, **repair} for repair in repairs]
+
+
+def parse_function_call_arguments(call: JsonObject) -> JsonObject:
+    arguments = call.get("arguments")
+    if not isinstance(arguments, str):
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def tool_call_candidate_key(call: ToolCall) -> str:
+    try:
+        args = json.dumps(call.arguments, ensure_ascii=True, sort_keys=True, default=str)
+    except TypeError:
+        args = repr(call.arguments)
+    return f"{call.name}\0{args}"
 
 
 def collect_existing_function_calls(response: JsonObject) -> list[JsonObject]:

@@ -8,6 +8,37 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.6.2 - 2026-05-10
+
+- Added an upstream request diet stage that can digest oversized Codex instructions and compact oversized tool schemas before forwarding to vLLM.
+- Added `--instruction-policy full|auto|digest` and `--tool-schema-policy full|auto|compact`; both default to `auto`.
+- Added request-size metadata to proxy captures, including original/sent instruction and tool-schema character counts plus final upstream body size.
+- Preserved transformed upstream request metadata on upstream timeouts by returning timeout responses through the normal proxy-result capture path.
+- Added command-quality detection for unbounded full-page web fetches such as `Invoke-WebRequest ... | Select-Object -ExpandProperty Content`.
+- Extended helper scripts and health checks with request-diet policy settings.
+
+## 0.6.1 - 2026-05-10
+
+- Added upstream tool-discipline guardrails for native and flattened requests, so open models see the exact callable tool names before choosing a tool.
+- Explicitly warns local models not to invent common aliases such as `web_search`, `browser`, `fetch`, `write_file`, `read_file`, or `apply_patch` unless those names are actually advertised by Codex.
+- Strengthened the spoon context header with the same structured-tool-only and unavailable-tool guidance.
+- Added regression coverage for the GLM live failure where the model emitted `<tool_call>web_search...` even though Codex had only advertised tools such as `shell` and `update_plan`.
+
+## 0.6.0 - 2026-05-10
+
+- Added model-agnostic recovery for GLM-style leaked `<tool_call>tool<arg_key>...<arg_value>...</arg_value></tool_call>` assistant text.
+- Added recovery for bare `recipient_name=functions.*` response headers and residual syntax scrubbing for `recipient_name`, `<response>`, and unparsable tool-call documentation blocks.
+- Normalization now sanitizes reasoning text and top-level `output_text` in addition to assistant message content.
+- Repairable leaked calls are promoted after schema cleanup, so string `shell.command` values and extra disallowed arguments can become valid structured calls.
+- Added Open Gate health metadata for version/model/context policy and hardened `scripts\run_proxy_benchmark.ps1` against stale proxy ports.
+- Added a deterministic adversarial validation loop for GLM tag whitespace mutations so malformed tags are tested through the full proxy normalizer rather than patched one sample at a time.
+- GLM-4.7-Flash serious-suite result improved from direct `2/20` strict successes with `18/20` leaks to Open Gate `repair/full` `20/20` strict successes with zero leaks. `repair/spoon` reached `19/20` with zero leaks; the remaining miss is an incomplete fenced JSON block that Open Gate intentionally does not guess.
+
+- Documented the first `GLM-4.7-Flash` direct baseline alongside the Qwen benchmark notes.
+- Added the GLM vLLM serving command and current parser flags to the vLLM notes.
+- Fixed the proxy benchmark runner so its Open Gate server uses the requested `-Model` instead of the original Qwen default, and added context-policy flags.
+- Documented the first GLM `repair/full` and `repair/spoon` benchmark results.
+
 ## 0.5.0 - 2026-05-10
 
 - Added `--context-policy spoon`, a budgeted context compiler for Codex Responses history before forwarding to vLLM.

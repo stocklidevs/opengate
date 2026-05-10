@@ -10,7 +10,11 @@ param(
     [ValidateSet("full", "spoon")]
     [string]$ContextPolicy = "full",
     [int]$ContextMaxChars = 60000,
-    [int]$ContextRecentItems = 10
+    [int]$ContextRecentItems = 10,
+    [ValidateSet("full", "auto", "digest")]
+    [string]$InstructionPolicy = "auto",
+    [ValidateSet("full", "auto", "compact")]
+    [string]$ToolSchemaPolicy = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,4 +31,6 @@ python -m open_gate.server `
     --normalization-mode $Mode `
     --context-policy $ContextPolicy `
     --context-max-chars $ContextMaxChars `
-    --context-recent-items $ContextRecentItems
+    --context-recent-items $ContextRecentItems `
+    --instruction-policy $InstructionPolicy `
+    --tool-schema-policy $ToolSchemaPolicy

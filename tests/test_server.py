@@ -11,9 +11,55 @@ from unittest.mock import patch
 
 from open_gate.proxy import ProxyResult
 from open_gate.server import CaptureServer, Handler
+from open_gate.version import __version__
 
 
 class ServerStreamingTests(unittest.TestCase):
+    def test_health_reports_server_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = CaptureServer(
+                ("127.0.0.1", 0),
+                Handler,
+                {
+                    "capture_dir": tmp,
+                    "model": "GLM-4.7-Flash",
+                    "text": "unused",
+                    "fixture": None,
+                    "upstream_base_url": "http://upstream.invalid/v1",
+                    "upstream_api_key": "sk-test",
+                    "upstream_timeout": 120.0,
+                    "normalization_mode": "repair",
+                    "upstream_input_mode": "auto",
+                    "context_policy": "spoon",
+                    "context_max_chars": 60000,
+                    "context_recent_items": 10,
+                    "instruction_policy": "auto",
+                    "tool_schema_policy": "auto",
+                    "stream_heartbeat_seconds": 0.05,
+                    "quiet": True,
+                },
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                connection.request("GET", "/health")
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["service"], "open-gate")
+            self.assertEqual(payload["version"], __version__)
+            self.assertEqual(payload["model"], "GLM-4.7-Flash")
+            self.assertEqual(payload["context_policy"], "spoon")
+            self.assertEqual(payload["instruction_policy"], "auto")
+            self.assertEqual(payload["tool_schema_policy"], "auto")
+
     def test_streaming_proxy_sends_heartbeat_before_buffered_response(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             capture_dir = Path(tmp)
@@ -33,6 +79,8 @@ class ServerStreamingTests(unittest.TestCase):
                     "context_policy": "full",
                     "context_max_chars": 60000,
                     "context_recent_items": 10,
+                    "instruction_policy": "auto",
+                    "tool_schema_policy": "auto",
                     "stream_heartbeat_seconds": 0.05,
                     "quiet": True,
                 },
