@@ -51,6 +51,12 @@ class StreamingTests(unittest.TestCase):
         self.assertIn("response.function_call_arguments.done", names)
         self.assertLess(names.index("response.function_call_arguments.done"), names.index("response.output_item.done"))
 
+    def test_can_continue_stream_after_initial_lifecycle_events(self) -> None:
+        events = response_stream_events({"id": "resp_test", "output": []}, include_initial=False, start_sequence=4)
+
+        self.assertEqual(events[0][0], "response.completed")
+        self.assertEqual(events[0][1]["sequence_number"], 4)
+
     def test_serialise_sse_outputs_event_and_data_lines(self) -> None:
         raw = serialise_sse(response_stream_events({"id": "resp_test", "output": []}))
 

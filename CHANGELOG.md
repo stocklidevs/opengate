@@ -8,6 +8,51 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.6.7 - 2026-05-10
+
+- Added the friendly `opengate` console command alongside the existing `open-gate` command.
+- Added TOML config loading with `opengate.toml`, `open-gate.toml`, `.opengate.toml`, `~/.opengate/config.toml`, and `OPENGATE_CONFIG` discovery.
+- Added an `opengate.example.toml` template and ignored local `opengate.toml` files for machine-specific vLLM endpoints.
+- Added upstream model autodetection from `GET /v1/models` when `model = "auto"`.
+- Added upstream model rewriting so Codex can keep a stable OpenGate profile while OpenGate forwards requests to whichever model vLLM is currently serving.
+- Added a startup banner showing the OpenGate version, listener URL, active flags, descriptions, and current values.
+
+## 0.6.6 - 2026-05-10
+
+- Replaced comment-only streamed keepalives with real Responses `response.in_progress` heartbeat events while Open Gate waits on buffered upstream vLLM output, avoiding Codex's five-minute SSE idle retry path on very slow local-model generations.
+- Added repair and command-quality detection for GLM's bare PowerShell here-string file-write shape, where the model emits the full `index.html` body followed by `-Path ... -Encoding ...` but omits the `Set-Content` cmdlet.
+- Added focused regression coverage for streamed lifecycle continuation and bare here-string artifact repair.
+- Updated live-run documentation to distinguish Open Gate normalization failures from Codex sandbox/policy failures.
+
+## 0.6.5 - 2026-05-10
+
+- Added command-quality detection for empty artifact writes, including GLM's repeated `WriteAllText('index.html', '')` placeholder calls.
+- Added a quarantine repair that rewrites empty artifact writes into harmless diagnostic shell calls, preserving Codex's tool-output loop without truncating the target file.
+- Added diagnostic quarantine for leaked shell calls with unrepaired command-quality errors, such as full-page `curl` fetches, so Codex gets tool feedback and the model can continue instead of ending on cleaned text.
+- Added tolerant parsing for GLM's large multi-line shell command arrays, where the HTML body appears as raw newlines inside a quoted JSON-like `command` value.
+- Increased the proxy CLI's default upstream timeout to 420 seconds for large local-model code-generation turns, while SSE heartbeats continue to keep Codex connected.
+- Extended the spoon/tool guardrails and context constraints so repeated empty-placeholder writes feed back as a compact "write the complete artifact" instruction.
+- Updated the interactive proxy launch docs with the GLM-focused spoon command and longer upstream timeout.
+
+## 0.6.4 - 2026-05-10
+
+- Added live Codex software-build fixture cases for a CSV expense CLI, incident-log triage CLI, and single-file habit tracker app.
+- Added per-case live benchmark working directories, sandbox selection, Codex last-message capture, and timeout-bounded case execution.
+- Added prompt-visible sandbox preflight to the live Codex benchmark, with `-FailOnPromptSandboxMismatch` to skip poisoned runs where Codex tells the model a different sandbox than the harness requested.
+- Added tolerant repair for GLM nested PowerShell JSON-array calls that contain uppercase `\N` newline escapes inside the encoded command.
+- Fixed negative-tool-intent detection so words such as "sample" in artifact names or sample commands no longer block valid tool-call promotion.
+- Updated live reporting so `last-*.txt` final-message files are not counted as Codex JSONL run streams.
+
+## 0.6.3 - 2026-05-10
+
+- Added policy protection for `spawn_agent`: Open Gate now warns upstream models not to call it unless the user explicitly asks for subagents, and suppresses/promotes leaked calls accordingly.
+- Added validation for `spawn_agent.agent_type`, allowing only `default`, `explorer`, or `worker`.
+- Added command-quality detection for malformed JSON-array text passed as a PowerShell `-Command` script.
+- Blocked promotion of leaked text tool calls that still contain unrepaired command-quality errors after schema repair.
+- Added repair for GLM/Qwen shell calls that split PowerShell `-Command` across array items, such as `["powershell.exe","-Command","Set-Content","-Path",...]`.
+- Added repair for bare PowerShell cmdlets such as `["Write-Host","loading"]`, wrapping them as `powershell.exe -Command ...`.
+- Added suppression for structured tool calls with remaining error-level command-quality issues, including full-page web fetches that would dump whole HTML into context.
+
 ## 0.6.2 - 2026-05-10
 
 - Added an upstream request diet stage that can digest oversized Codex instructions and compact oversized tool schemas before forwarding to vLLM.

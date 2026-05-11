@@ -27,11 +27,18 @@ The leakage parser recognizes:
 The linter currently reports:
 
 - `nested_powershell`: `powershell.exe -Command` wrapped inside another PowerShell `-Command`.
+- `split_powershell_command`: `powershell.exe -Command` followed by split parameter array items instead of one script string.
+- `direct_powershell_cmdlet`: a bare PowerShell cmdlet such as `Write-Host` or `Set-Content` used as the executable.
 - `windows_powershell_chain_operator`: `&&` used under Windows PowerShell.
 - `powershell_here_string_header`: a here-string header followed by escaped `` `n `` text instead of a real newline.
+- `bare_here_string_file_write`: a PowerShell here-string contains the artifact body, but the command forgot the `Set-Content` cmdlet and only includes `-Path`/`-Encoding` arguments.
+- `malformed_json_array_command`: malformed JSON-array text passed as a PowerShell `-Command` script. If the nested array is otherwise recoverable, Open Gate can unwrap it, including GLM-style uppercase `\N` newline escapes inside the encoded command.
+- GLM sometimes places a full multi-line HTML document inside a quoted JSON-like `shell.command` array. Open Gate parses that relaxed array shape before falling back to string-command repair.
+- GLM can also emit the full `index.html` body as a bare here-string followed by file parameters. Open Gate repairs that into a PowerShell `Set-Content` command so Codex receives a runnable tool call.
 - `python_compound_statement_one_liner`: `python -c` with compound statements such as `async def` packed after semicolons.
 - `uv_run_playwright_entrypoint`: `uv run playwright ...` before the Playwright console script is known to exist.
 - `unbounded_web_fetch`: full-page web fetches that print whole HTML content into the model context.
+- `empty_artifact_write`: `WriteAllText`, `Set-Content`, or equivalent PowerShell that creates/truncates a code or document artifact to empty content.
 - `relative_cd_without_workdir`: inline relative `cd` instead of the shell tool's `workdir`.
 - `nested_relative_cd`: inline `cd` into the same directory already provided as `workdir`.
 - `view_image_non_image_path`: `view_image` pointed at a path without a known image extension.
@@ -43,8 +50,10 @@ Proxy captures include command-quality telemetry in `normalization`:
 
 - `upstream_command_quality_issues`: issues found before Open Gate repair.
 - `normalized_command_quality_issues`: issues that remain after repair/promotion.
+- `text_tool_call_repairs`: leaked text tool calls whose arguments were repaired before promotion.
+- `command_quality_suppressed_structured_calls`: structured calls removed because error-level command-quality issues remained after repair.
 
-Repair mode may fix safe command-shape problems such as nested PowerShell or JSON-array encoded PowerShell. It does not rewrite risky shell semantics such as replacing `&&` with `;`.
+Repair mode may fix safe command-shape problems such as nested PowerShell, split PowerShell command arrays, bare PowerShell cmdlets, or JSON-array encoded PowerShell. Empty artifact writes and leaked shell calls with unrepaired command-quality errors are quarantined into harmless diagnostic shell calls so Codex receives tool feedback and can continue the normal loop without running the bad command. Structured calls with remaining error-level issues are suppressed before Codex can execute them; Open Gate returns a short diagnostic message instead of the bad tool call. It does not rewrite risky shell semantics such as replacing `&&` with `;`.
 
 ## CLI Usage
 

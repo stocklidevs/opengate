@@ -12,7 +12,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from .command_quality import inspect_tool_calls, repair_shell_arguments
+from .command_quality import (
+    EMPTY_ARTIFACT_WRITE_DIAGNOSTIC,
+    inspect_tool_calls,
+    parse_shell_array_string,
+    repair_shell_arguments,
+)
 from .linter import ToolCall, analyze_text, load_tool_specs
 
 
@@ -28,8 +33,6 @@ NEGATIVE_TOOL_INTENT = (
     "not execute",
     "only documentation",
     "documentation, not execution",
-    "sample",
-    "example",
 )
 CONTEXT_POLICIES = {"full", "spoon"}
 INSTRUCTION_POLICIES = {"full", "auto", "digest"}
@@ -58,8 +61,12 @@ COMMAND_ISSUE_HINTS = {
     "view_image_non_image_path": "view_image expects an image file path, not a directory or project root.",
     "skill_file_as_mcp_resource": "Codex skills are local instruction files, not MCP resources.",
     "html_echo_without_file_write": "Do not print a full HTML document to stdout; write the content to index.html.",
+    "empty_artifact_write": "Do not create or truncate an empty target artifact; write the complete requested file content in one valid tool call.",
     "bash_heredoc_in_powershell": "Do not use Bash heredoc syntax in PowerShell; use a PowerShell here-string and Set-Content.",
     "unbounded_web_fetch": "Do not fetch or print a whole web page into context; use metadata, title, headings, or a small bounded excerpt.",
+    "malformed_json_array_command": "Do not pass a malformed JSON command array as the PowerShell script; use a normal shell command array.",
+    "split_powershell_command": "Pass one complete script string after powershell.exe -Command instead of splitting PowerShell parameters across the command array.",
+    "direct_powershell_cmdlet": "Run PowerShell cmdlets through powershell.exe -Command; bare cmdlet names are not executable programs.",
 }
 TOOL_GUARDRAIL_MARKER = "Open Gate tool discipline:"
 COMMON_UNAVAILABLE_TOOL_ALIASES = (
@@ -74,6 +81,12 @@ COMMON_UNAVAILABLE_TOOL_ALIASES = (
     "write_file",
     "edit",
     "apply_patch",
+)
+ALLOWED_SPAWN_AGENT_TYPES = {"default", "explorer", "worker"}
+SUBAGENT_INTENT_RE = re.compile(
+    r"\b(sub-?agent|spawn(?:\s+an?|\s+multiple)?\s+agent|parallel\s+agent|delegate(?:\s+to)?\s+agent|"
+    r"use\s+(?:multiple\s+)?agents|worker\s+agent|explorer\s+agent)\b",
+    re.IGNORECASE,
 )
 
 
@@ -108,6 +121,7 @@ def forward_responses_request(
     api_key: str,
     timeout: float,
     normalization_mode: str = "repair",
+    upstream_model: str | None = None,
     upstream_input_mode: str = "auto",
     context_policy: str = "full",
     context_max_chars: int = DEFAULT_CONTEXT_MAX_CHARS,
@@ -126,6 +140,9 @@ def forward_responses_request(
     if tool_schema_policy not in TOOL_SCHEMA_POLICIES:
         raise ValueError(f"Unsupported tool schema policy: {tool_schema_policy}")
     upstream_request = deepcopy(request_body)
+    requested_model = upstream_request.get("model")
+    if upstream_model:
+        upstream_request["model"] = upstream_model
     requested_stream = bool(upstream_request.get("stream"))
     upstream_request["stream"] = False
     upstream_transform = transform_upstream_request(
@@ -137,6 +154,9 @@ def forward_responses_request(
         instruction_policy=instruction_policy,
         tool_schema_policy=tool_schema_policy,
     )
+    upstream_transform["requested_model"] = requested_model
+    upstream_transform["upstream_model"] = upstream_request.get("model")
+    upstream_transform["model_overridden"] = bool(upstream_model and requested_model != upstream_model)
     status, upstream_response = post_json(upstream_base_url, "/responses", upstream_request, api_key, timeout)
     normalized_response, normalization = normalize_responses_response(upstream_response, request_body)
     returned_response = deepcopy(normalized_response if normalization_mode == "repair" else upstream_response)
@@ -266,11 +286,15 @@ def build_tool_guardrail_text(tools: list[JsonObject]) -> str:
         f"- The only callable tools in this request are: {', '.join(tool_names)}.",
         "- If a tool name is not in that exact list, do not call it and do not print a raw tool-call tag for it.",
         "- Use structured tool calls only; never emit XML/JSON/function-call syntax as assistant text or reasoning.",
+        "- Never create or truncate an empty target artifact as a placeholder; write the complete requested file when you call a tool.",
     ]
     if unavailable:
         lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
     if "web_search" not in tool_names:
         lines.append("- There is no web_search/browser tool here. For external URLs, make at most one small shell-based inspection if shell is listed; otherwise proceed from the prompt.")
+    if "spawn_agent" in tool_names:
+        lines.append("- spawn_agent is only for explicit user requests for subagents, delegation, or parallel agent work; otherwise do the work directly.")
+        lines.append("- If spawn_agent is explicitly requested, agent_type must be one of: default, explorer, worker.")
     if "shell" in tool_names:
         lines.append("- When using shell on Windows, keep commands small and direct, and prefer the workdir argument over inline cd.")
     return "\n".join(lines)
@@ -325,7 +349,9 @@ def build_instruction_digest(_instructions: str) -> str:
             "- Never print raw tool-call XML, JSON tool_calls arrays, recipient_name syntax, or function-call text.",
             "- Prefer small direct steps, update plans only when useful, and avoid loops after failures.",
             "- Respect sandbox and approval information in the request context.",
+            "- Do not call spawn_agent unless the user explicitly asked for subagents, delegation, or parallel agent work.",
             "- When creating files, write the requested artifact directly instead of dumping large content to stdout.",
+            "- Never create or truncate an empty target artifact as a placeholder.",
         ]
     )
 
@@ -555,6 +581,9 @@ def build_spoon_header(
             lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
         if "web_search" not in tool_names:
             lines.append("- There is no web_search/browser tool here. For external URLs, use at most one small shell-based inspection if shell is listed; otherwise proceed from the prompt.")
+        if "spawn_agent" in tool_names:
+            lines.append("- spawn_agent is only for explicit user requests for subagents, delegation, or parallel agent work; otherwise do the work directly.")
+            lines.append("- If spawn_agent is explicitly requested, agent_type must be one of: default, explorer, worker.")
         if "apply_patch" not in tool_names:
             lines.append("- apply_patch is not available in this Codex session; do not call it.")
         if "write" not in tool_names:
@@ -566,7 +595,7 @@ def build_spoon_header(
         if "shell" in tool_names:
             lines.append("- shell commands run on Windows PowerShell here; use the workdir argument instead of inline relative cd when possible.")
             lines.append("- To create index.html with shell, write to index.html; do not echo the full HTML document to stdout.")
-            lines.append("- If the task requires one index.html file, write the complete final file instead of creating an empty placeholder first.")
+            lines.append("- If the task requires one index.html file, write the complete final file instead of creating or truncating an empty placeholder first.")
             lines.append("- Do not use Bash heredoc syntax like cat > file << EOF in PowerShell; use a PowerShell here-string with Set-Content.")
     if user_constraints:
         lines.append("Durable user constraints:")
@@ -695,6 +724,8 @@ def constraints_from_tool_output(output: str) -> list[str]:
         constraints.append("A previous operation timed out; keep the next tool call smaller and more direct.")
     if "unbounded_web_fetch" in lowered or "whole web page" in lowered:
         constraints.append("Avoid fetching or printing a whole web page; use metadata, title, headings, or a small bounded excerpt.")
+    if "open gate blocked an empty file write" in lowered or "empty_artifact_write" in lowered:
+        constraints.append("Do not create or truncate empty artifact files; write the complete requested file content in one valid tool call.")
     if "not recognized as the name of" in lowered:
         constraints.append("A shell command was not recognized; verify commands before relying on them.")
     return constraints
@@ -834,6 +865,8 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
     upstream_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
     repairs = repair_structured_calls(normalized, tools)
     suppressed = suppress_structured_calls_if_blocked(normalized, original_request)
+    policy_suppressed = suppress_policy_blocked_structured_calls(normalized, original_request)
+    command_quality_suppressed = suppress_command_quality_blocked_structured_calls(normalized)
     text_slots = collect_response_text_slots(normalized)
     existing_calls = collect_existing_function_calls(normalized)
     promoted: list[ToolCall] = []
@@ -854,6 +887,19 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
             repaired_call, candidate_repairs = repair_text_tool_call_candidate(call, tools)
             if candidate_repairs:
                 text_candidate_repairs.extend(candidate_repairs)
+            policy_errors = policy_tool_call_errors(repaired_call.name, repaired_call.arguments, original_request)
+            if policy_errors:
+                repaired_call.valid = False
+                repaired_call.errors.extend(policy_errors)
+            quarantined_call, quarantine_repair = quarantine_command_quality_tool_call(repaired_call)
+            if quarantine_repair:
+                repaired_call = quarantined_call
+                text_candidate_repairs.append(quarantine_repair)
+            else:
+                command_quality_errors = blocking_command_quality_errors(repaired_call)
+                if command_quality_errors:
+                    repaired_call.valid = False
+                    repaired_call.errors.extend(command_quality_errors)
             if repaired_call.valid:
                 key = tool_call_candidate_key(repaired_call)
                 if key not in seen_candidates:
@@ -872,15 +918,21 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         for call in promoted:
             output.append(build_function_call_item(call))
         repairs.extend(repair_structured_calls(normalized, tools))
+    removed_reasoning_items = 0
+    if has_empty_artifact_quarantine([*repairs, *text_candidate_repairs]):
+        removed_reasoning_items = remove_reasoning_items(normalized)
     normalized_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
 
     normalization = {
         "normalized_at": datetime.now(timezone.utc).isoformat(),
         "suppressed_structured_calls": suppressed,
+        "policy_suppressed_structured_calls": policy_suppressed,
+        "command_quality_suppressed_structured_calls": command_quality_suppressed,
         "structured_argument_repairs": repairs,
         "text_tool_call_repairs": text_candidate_repairs,
         "upstream_command_quality_issues": upstream_command_quality_issues,
         "normalized_command_quality_issues": normalized_command_quality_issues,
+        "reasoning_items_removed": removed_reasoning_items,
         "stripped_text_items": stripped,
         "existing_structured_calls": len(existing_calls),
         "promoted_tool_calls": [call.to_json() for call in promoted] if should_promote else [],
@@ -996,6 +1048,9 @@ def repair_structured_calls(response: JsonObject, tools: list[JsonObject]) -> li
 
 def coerce_string_to_array_argument(tool_name: str, key: str, value: str) -> list[str]:
     if tool_name == "shell" and key == "command":
+        parsed = parse_shell_array_string(value)
+        if parsed is not None:
+            return parsed
         return ["powershell.exe", "-Command", value]
     return [value]
 
@@ -1019,6 +1074,176 @@ def suppress_structured_calls_if_blocked(response: JsonObject, request_body: Jso
     if suppressed:
         response["output"] = kept
     return suppressed
+
+
+def suppress_policy_blocked_structured_calls(response: JsonObject, request_body: JsonObject) -> list[JsonObject]:
+    output = response.get("output")
+    if not isinstance(output, list):
+        return []
+    suppressed: list[JsonObject] = []
+    kept: list[JsonObject] = []
+    for item in output:
+        if isinstance(item, dict) and item.get("type") in ("function_call", "custom_tool_call"):
+            errors = policy_tool_call_errors(item.get("name"), parse_function_call_arguments(item), request_body)
+            if errors:
+                copied = deepcopy(item)
+                copied["policy_errors"] = errors
+                suppressed.append(copied)
+                continue
+        kept.append(item)
+    if suppressed:
+        response["output"] = kept
+    return suppressed
+
+
+def suppress_command_quality_blocked_structured_calls(response: JsonObject) -> list[JsonObject]:
+    output = response.get("output")
+    if not isinstance(output, list):
+        return []
+    suppressed: list[JsonObject] = []
+    kept: list[JsonObject] = []
+    for item in output:
+        if isinstance(item, dict) and item.get("type") in ("function_call", "custom_tool_call"):
+            errors = [issue for issue in inspect_tool_calls([item]) if issue.get("severity") == "error"]
+            if errors:
+                copied = deepcopy(item)
+                copied["command_quality_errors"] = errors
+                suppressed.append(copied)
+                continue
+        kept.append(item)
+    if suppressed:
+        response["output"] = kept
+        append_command_quality_suppression_message(response, suppressed)
+    return suppressed
+
+
+def append_command_quality_suppression_message(response: JsonObject, suppressed: list[JsonObject]) -> None:
+    output = response.setdefault("output", [])
+    if not isinstance(output, list) or has_visible_or_callable_output(output):
+        return
+    issue_names = dedupe_keep_order(
+        [
+            str(issue.get("issue"))
+            for item in suppressed
+            for issue in item.get("command_quality_errors", [])
+            if issue.get("issue")
+        ]
+    )
+    issue_text = ", ".join(issue_names[:4]) or "command_quality"
+    output.append(
+        {
+            "id": f"msg_og_suppressed_{uuid.uuid4().hex}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": f"Open Gate suppressed an invalid tool call ({issue_text}). Continue with a smaller valid structured tool call.",
+                    "annotations": [],
+                }
+            ],
+        }
+    )
+
+
+def has_visible_or_callable_output(output: list[Any]) -> bool:
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in ("function_call", "custom_tool_call"):
+            return True
+        if item.get("type") == "message" and not is_empty_message(item):
+            return True
+    return False
+
+
+def has_empty_artifact_quarantine(repairs: list[JsonObject]) -> bool:
+    return any(EMPTY_ARTIFACT_WRITE_DIAGNOSTIC in json.dumps(repair, ensure_ascii=True, default=str) for repair in repairs)
+
+
+def remove_reasoning_items(response: JsonObject) -> int:
+    output = response.get("output")
+    if not isinstance(output, list):
+        return 0
+    kept = [item for item in output if not (isinstance(item, dict) and item.get("type") == "reasoning")]
+    removed = len(output) - len(kept)
+    if removed:
+        response["output"] = kept
+    return removed
+
+
+def policy_tool_call_errors(name: Any, arguments: JsonObject, request_body: JsonObject) -> list[str]:
+    if name != "spawn_agent":
+        return []
+    errors: list[str] = []
+    if not has_explicit_subagent_intent(request_body):
+        errors.append("spawn_agent requires an explicit user request for subagents, delegation, or parallel agent work")
+    agent_type = arguments.get("agent_type")
+    if agent_type is not None and agent_type not in ALLOWED_SPAWN_AGENT_TYPES:
+        errors.append("spawn_agent agent_type must be one of: default, explorer, worker")
+    return errors
+
+
+def blocking_command_quality_errors(call: ToolCall) -> list[str]:
+    issues = command_quality_error_issues(call)
+    errors: list[str] = []
+    for issue in issues:
+        issue_name = issue.get("issue") or "command_quality"
+        message = issue.get("message") or "The tool call has an unrepaired command-quality issue."
+        errors.append(f"Command quality issue {issue_name}: {message}")
+    return errors
+
+
+def quarantine_command_quality_tool_call(call: ToolCall) -> tuple[ToolCall, JsonObject | None]:
+    if call.name != "shell":
+        return call, None
+    issues = command_quality_error_issues(call)
+    if not issues:
+        return call, None
+    issue_names = dedupe_keep_order([str(issue.get("issue")) for issue in issues if issue.get("issue")])
+    diagnostic = command_quality_diagnostic_text(issue_names)
+    quarantined = ToolCall(
+        name=call.name,
+        arguments={**call.arguments, "command": ["powershell.exe", "-Command", "Write-Output " + powershell_quote(diagnostic)]},
+        source=call.source,
+        span=call.span,
+        raw=call.raw,
+        valid=True,
+        errors=[],
+    )
+    return quarantined, {
+        "source": call.source,
+        "tool": call.name,
+        "before": call.arguments,
+        "after": quarantined.arguments,
+        "quarantined_command_quality_issues": issues,
+    }
+
+
+def command_quality_error_issues(call: ToolCall) -> list[JsonObject]:
+    return [issue for issue in inspect_tool_calls([build_function_call_item(call)]) if issue.get("severity") == "error"]
+
+
+def command_quality_diagnostic_text(issue_names: list[str]) -> str:
+    issue_text = ", ".join(issue_names[:4]) or "command_quality"
+    if "unbounded_web_fetch" in issue_names:
+        return (
+            f"Open Gate blocked an invalid shell command ({issue_text}). "
+            "Do not retry that route; proceed from the prompt and create the requested artifact directly."
+        )
+    return (
+        f"Open Gate blocked an invalid shell command ({issue_text}). "
+        "Continue with a smaller valid structured tool call."
+    )
+
+
+def powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def has_explicit_subagent_intent(request_body: JsonObject) -> bool:
+    return bool(SUBAGENT_INTENT_RE.search(all_user_text(request_body)))
 
 
 def should_promote_tool_calls(request_body: JsonObject) -> bool:
@@ -1050,6 +1275,20 @@ def latest_user_text(request_body: JsonObject) -> str:
             continue
         return flatten_content(item.get("content"))
     return ""
+
+
+def all_user_text(request_body: JsonObject) -> str:
+    input_value = request_body.get("input")
+    if isinstance(input_value, str):
+        return input_value
+    if not isinstance(input_value, list):
+        return ""
+    texts: list[str] = []
+    for item in input_value:
+        if not isinstance(item, dict) or item.get("role") != "user":
+            continue
+        texts.append(flatten_content(item.get("content")))
+    return "\n".join(texts)
 
 
 def flatten_content(value: Any) -> str:

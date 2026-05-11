@@ -1,6 +1,6 @@
 # Context Policy
 
-Open Gate `0.5.0` added a context compiler for Codex traffic sent to open local models. Open Gate `0.6.1` also injects a compact tool-discipline guardrail for native and flattened requests, even when `spoon` is not enabled. Open Gate `0.6.2` adds an upstream request diet for oversized Codex instructions and tool schemas.
+Open Gate `0.5.0` added a context compiler for Codex traffic sent to open local models. Open Gate `0.6.1` also injects a compact tool-discipline guardrail for native and flattened requests, even when `spoon` is not enabled. Open Gate `0.6.2` adds an upstream request diet for oversized Codex instructions and tool schemas. Open Gate `0.6.5` quarantines empty artifact writes into harmless diagnostic tool calls so Codex can continue the loop without truncating the target file. Open Gate `0.6.6` sends real Responses heartbeat events during long buffered upstream turns and repairs GLM's bare here-string artifact writes. Open Gate `0.6.7` adds config-first launch defaults and upstream model autodetection.
 
 ## Why
 
@@ -19,7 +19,7 @@ Codex can accumulate very large Responses histories during real coding work: ass
 | `full` | Existing behavior. When flattening is needed, send the complete flattened transcript upstream. |
 | `spoon` | Force list-shaped Responses input through a budgeted compiler. Older items are summarized, recent items stay exact, and failure constraints are injected. |
 
-The default is still `full` so benchmarks remain comparable. Use `spoon` for long interactive Codex runs against vLLM or other local open-model servers.
+The app defaults now favor `spoon` for normal interactive use. Benchmark scripts can still pass `--context-policy full` when comparability matters.
 
 Both modes now tell the upstream model which tool names are actually callable. This prevents a common open-model failure where the model prints a plausible but unsupported call such as `web_search`, `browser`, `write_file`, or `apply_patch` even though Codex did not advertise that tool.
 
@@ -28,26 +28,15 @@ After input compilation, Open Gate can also reduce request overhead that is not 
 ## Run
 
 ```powershell
-python -m open_gate `
-  --host 127.0.0.1 `
-  --port 8765 `
-  --model Qwen3-Coder-Next `
-  --upstream http://127.0.0.1:8001/v1 `
-  --normalization-mode repair `
-  --upstream-input-mode auto `
-  --context-policy spoon `
-  --context-max-chars 60000 `
-  --context-recent-items 10 `
-  --instruction-policy auto `
-  --tool-schema-policy auto `
-  --stream-heartbeat-seconds 5
+opengate
 ```
 
-The helper script exposes the same knobs:
+`opengate` loads `opengate.toml` when present, autodetects the upstream model when `model = "auto"`, and prints the active flag values at launch. The helper script still exposes the same knobs:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\start_proxy.ps1 `
   -ContextPolicy spoon `
+  -UpstreamTimeoutSeconds 420 `
   -ContextMaxChars 60000 `
   -ContextRecentItems 10 `
   -InstructionPolicy auto `
@@ -62,6 +51,7 @@ In `spoon` mode, Open Gate prepends a short digest:
 - the original flattened size and the active character budget;
 - available tool names;
 - unavailable common tool aliases, such as `web_search`, unless Codex actually advertised them;
+- subagent policy: `spawn_agent` is only for explicit user requests for subagents, delegation, or parallel agent work;
 - request-diet guidance that keeps large instructions and schemas compact before upstream generation;
 - durable user constraints such as `Everything must be contained in index.html`;
 - tool-use guardrails for exact schemas, smaller commands, and avoiding repeated failed routes;
@@ -72,7 +62,9 @@ Examples of inferred constraints:
 - `write_file` was unsupported, so use the advertised tools only;
 - `apply_patch` is not available unless it appears in the advertised tool names;
 - full HTML should be written to `index.html`, not echoed to stdout;
+- empty target artifacts should not be created or truncated as placeholders; write the complete requested file content in one valid tool call;
 - Bash heredoc syntax such as `cat > file << EOF` is not valid in Windows PowerShell; Open Gate can repair simple cases into a PowerShell here-string plus `Set-Content`;
+- bare PowerShell here-strings followed by `-Path`/`-Encoding` are incomplete file writes; Open Gate can repair them into `Set-Content`;
 - Windows PowerShell rejected `&&`, so use `workdir`, `;`, or separate calls;
 - `uv run playwright` failed to spawn, so do not retry the same executable blindly;
 - shell-based web fetch hit `WinError 10013`, so continue from available context or choose a different route.
@@ -103,12 +95,13 @@ Large recent tool outputs are summarized even when the surrounding recent turn i
 
 ## Validation Target
 
-For local Qwen3-Coder-Next, the current stress target is:
+For local Qwen3-Coder-Next and GLM-4.7-Flash, the current stress target is:
 
 - finish the interactive Codex webpage prompt in under 7 minutes;
 - return no leaked tool calls;
 - return no invalid tool calls;
 - return no command-quality issues;
-- avoid repeated 120-second upstream timeout turns.
+- avoid repeated upstream timeout turns.
+- avoid Codex SSE idle retry turns during slow local-model generation.
 
 This is intentionally stricter than “the model eventually made a file.” The goal is to make local open models feel viable inside Codex, not just technically connected.

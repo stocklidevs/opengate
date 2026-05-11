@@ -1,0 +1,25 @@
+# Copy this file to opengate.toml and adjust the upstream endpoint for your local model server.
+
+[server]
+host = "127.0.0.1"
+port = 8765
+capture_dir = "captures"
+
+[upstream]
+scheme = "http"
+host = "127.0.0.1"
+port = 8001
+path = "/v1"
+api_key = "sk-no-key-required"
+timeout = 420
+model = "auto"
+
+[proxy]
+normalization_mode = "repair"
+upstream_input_mode = "auto"
+context_policy = "spoon"
+context_max_chars = 60000
+context_recent_items = 12
+instruction_policy = "auto"
+tool_schema_policy = "auto"
+stream_heartbeat_seconds = 2

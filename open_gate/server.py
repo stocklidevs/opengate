@@ -8,12 +8,16 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 import time
+import tomllib
 import uuid
 from typing import Any
-from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin, urlparse
+from urllib.request import Request, urlopen
 
+from .config import discover_config_path, load_config_file, merge_config
 from .proxy import build_proxy_error_response, forward_responses_request
-from .streaming import response_stream_events, serialise_sse_comment
+from .streaming import response_created_event, response_in_progress_event, response_stream_events, started_response
 from .version import __version__
 
 
@@ -51,6 +55,9 @@ class Handler(BaseHTTPRequestHandler):
                     "tool_schema_policy": self.server.config.get("tool_schema_policy", "auto"),
                     "stream_heartbeat_seconds": self.server.config.get("stream_heartbeat_seconds", 5.0),
                     "capture_dir": self.server.config.get("capture_dir"),
+                    "config_path": self.server.config.get("config_path"),
+                    "model_source": self.server.config.get("model_source"),
+                    "upstream_base_url": self.server.config.get("upstream_base_url"),
                 }
             )
             return
@@ -106,6 +113,13 @@ class Handler(BaseHTTPRequestHandler):
         result_queue: Queue[tuple[str, Any]] = Queue(maxsize=1)
         started_at = datetime.now(timezone.utc)
         started_monotonic = time.monotonic()
+        stream_response_id = f"resp_og_{uuid.uuid4().hex}"
+        stream_started = started_response(
+            stream_response_id,
+            model=body.get("model") or self.server.config.get("model"),
+            instructions=body.get("instructions"),
+        )
+        sequence_number = 0
 
         def worker() -> None:
             try:
@@ -115,9 +129,13 @@ class Handler(BaseHTTPRequestHandler):
 
         Thread(target=worker, daemon=True).start()
         self._start_sse_response()
+        client_connected = self._write_sse_safe(*response_created_event(stream_started, sequence_number))
+        sequence_number += 1
+        if client_connected:
+            client_connected = self._write_sse_safe(*response_in_progress_event(stream_started, sequence_number))
+        sequence_number += 1
 
         heartbeats = 0
-        client_connected = True
         heartbeat_seconds = float(self.server.config["stream_heartbeat_seconds"])
         while True:
             try:
@@ -126,7 +144,10 @@ class Handler(BaseHTTPRequestHandler):
             except Empty:
                 heartbeats += 1
                 if client_connected:
-                    client_connected = self._write_sse_comment(f"open-gate waiting for upstream heartbeat={heartbeats}")
+                    client_connected = self._write_sse_safe(
+                        *response_in_progress_event(stream_started, sequence_number)
+                    )
+                    sequence_number += 1
 
         timing = self._proxy_timing(started_at, started_monotonic, stream_heartbeats=heartbeats)
         if kind == "exception":
@@ -139,7 +160,8 @@ class Handler(BaseHTTPRequestHandler):
             self._capture_proxy_exchange(path, body, result, response, timing)
 
         if client_connected:
-            self._write_response_events(response)
+            response["id"] = stream_response_id
+            self._write_response_events(response, include_initial=False, start_sequence=sequence_number)
 
     def _forward_proxy_response(self, body: JsonObject) -> Any:
         return forward_responses_request(
@@ -154,6 +176,7 @@ class Handler(BaseHTTPRequestHandler):
             context_recent_items=int(self.server.config["context_recent_items"]),
             instruction_policy=self.server.config["instruction_policy"],
             tool_schema_policy=self.server.config["tool_schema_policy"],
+            upstream_model=self.server.config.get("model") if self.server.config.get("upstream_base_url") else None,
         )
 
     def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
@@ -327,8 +350,18 @@ class Handler(BaseHTTPRequestHandler):
         self._start_sse_response()
         self._write_response_events(response)
 
-    def _write_response_events(self, response: JsonObject) -> None:
-        for event_name, payload in response_stream_events(response):
+    def _write_response_events(
+        self,
+        response: JsonObject,
+        *,
+        include_initial: bool = True,
+        start_sequence: int = 0,
+    ) -> None:
+        for event_name, payload in response_stream_events(
+            response,
+            include_initial=include_initial,
+            start_sequence=start_sequence,
+        ):
             self._write_sse(event_name, payload)
 
     def _stream_chat_completion(self, request: JsonObject, text: str) -> None:
@@ -360,10 +393,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
         self.wfile.flush()
 
-    def _write_sse_comment(self, comment: str) -> bool:
+    def _write_sse_safe(self, event_name: str, payload: JsonObject) -> bool:
         try:
-            self.wfile.write(serialise_sse_comment(comment))
-            self.wfile.flush()
+            self._write_sse(event_name, payload)
             return True
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return False
@@ -426,89 +458,193 @@ def build_chat_completion(request: JsonObject, text: str, default_model: str) ->
     }
 
 
+SETTING_DESCRIPTIONS = {
+    "config_path": "Config file used for defaults before CLI overrides.",
+    "host": "Local interface OpenGate listens on.",
+    "port": "Local port OpenGate listens on.",
+    "capture_dir": "Directory where proxy captures are written.",
+    "model": "Upstream model ID advertised to Codex and used when forwarding requests.",
+    "model_source": "How the active model value was selected.",
+    "upstream_base_url": "OpenAI-compatible upstream base URL, usually your vLLM /v1 endpoint.",
+    "upstream_api_key": "Bearer token sent upstream; vLLM usually ignores the placeholder default.",
+    "upstream_timeout": "Seconds OpenGate waits for one buffered upstream model response.",
+    "normalization_mode": "repair returns cleaned responses; observe records fixes but returns raw upstream output.",
+    "upstream_input_mode": "auto flattens Codex Responses history only when vLLM needs it.",
+    "context_policy": "spoon compacts long Codex history while preserving recent turns and durable constraints.",
+    "context_max_chars": "Maximum flattened context characters sent to the upstream model in spoon mode.",
+    "context_recent_items": "Number of newest Responses input items kept exact in spoon mode.",
+    "instruction_policy": "Controls whether oversized Codex instructions are digested before upstream forwarding.",
+    "tool_schema_policy": "Controls whether oversized tool schemas are compacted before upstream forwarding.",
+    "stream_heartbeat_seconds": "Seconds between Responses heartbeat events while waiting for vLLM.",
+    "text": "Probe response text used when OpenGate runs without an upstream.",
+    "fixture": "Optional text fixture used by capture/probe mode.",
+    "quiet": "Suppress per-request HTTP logging.",
+}
+
+
+def autodetect_upstream_model(base_url: str, api_key: str, timeout: float) -> str:
+    url = urljoin(base_url.rstrip("/") + "/", "models")
+    request = Request(url, method="GET", headers={"Authorization": f"Bearer {api_key}"})
+    try:
+        with urlopen(request, timeout=min(timeout, 15.0)) as response:
+            payload = response.read().decode("utf-8")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GET {url} returned HTTP {exc.code}: {body}") from exc
+    except (TimeoutError, URLError) as exc:
+        raise RuntimeError(f"GET {url} failed while detecting the upstream model: {exc}") from exc
+    try:
+        parsed = json.loads(payload) if payload else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"GET {url} did not return JSON model metadata") from exc
+    data = parsed.get("data") if isinstance(parsed, dict) else None
+    if not isinstance(data, list):
+        raise RuntimeError(f"GET {url} returned no model list")
+    for item in data:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip():
+            return item["id"]
+    raise RuntimeError(f"GET {url} returned an empty model list")
+
+
+def resolve_model(config: JsonObject) -> None:
+    model = config.get("model")
+    if config.get("upstream_base_url") and (model is None or str(model).strip().lower() == "auto"):
+        config["model"] = autodetect_upstream_model(
+            str(config["upstream_base_url"]),
+            str(config["upstream_api_key"]),
+            float(config["upstream_timeout"]),
+        )
+        config["model_source"] = "upstream /models"
+    elif model is None or str(model).strip().lower() == "auto":
+        config["model"] = "open-gate-probe"
+        config["model_source"] = "default"
+    else:
+        config["model_source"] = "cli/config"
+
+
+def masked_value(key: str, value: Any) -> str:
+    if key == "upstream_api_key" and value:
+        text = str(value)
+        return text[:4] + "..." if len(text) > 4 else "<set>"
+    if value is None:
+        return "<none>"
+    return str(value)
+
+
+def print_startup_banner(config: JsonObject) -> None:
+    if config.get("no_banner"):
+        return
+    rows = [
+        "OpenGate",
+        f"  version: {__version__}",
+        f"  listening: http://{config['host']}:{config['port']}/v1",
+        "",
+        "Active settings:",
+    ]
+    keys = [
+        "config_path",
+        "host",
+        "port",
+        "capture_dir",
+        "model",
+        "model_source",
+        "upstream_base_url",
+        "upstream_api_key",
+        "upstream_timeout",
+        "normalization_mode",
+        "upstream_input_mode",
+        "context_policy",
+        "context_max_chars",
+        "context_recent_items",
+        "instruction_policy",
+        "tool_schema_policy",
+        "stream_heartbeat_seconds",
+        "quiet",
+    ]
+    width = max(len(key) for key in keys)
+    for key in keys:
+        rows.append(
+            f"  --{key.replace('_', '-').ljust(width)}  "
+            f"{masked_value(key, config.get(key))}  "
+            f"# {SETTING_DESCRIPTIONS[key]}"
+        )
+    print("\n".join(rows), flush=True)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a local Responses API capture server.")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--capture-dir", default="captures")
-    parser.add_argument("--model", default="open-gate-probe")
-    parser.add_argument("--text", default=DEFAULT_TEXT)
+    parser = argparse.ArgumentParser(description="Run OpenGate, a local Responses API proxy for open coding models.")
+    parser.add_argument("--config", help="Path to an OpenGate TOML config file. Defaults to opengate.toml in the current directory, then ~/.opengate/config.toml.")
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--capture-dir")
+    parser.add_argument("--model", help="Upstream model ID. Use 'auto' to detect it from GET /v1/models.")
+    parser.add_argument("--text")
     parser.add_argument("--fixture", help="Text file to stream as the assistant response.")
     parser.add_argument("--upstream-base-url", "--upstream", dest="upstream_base_url", help="Forward /v1/responses to this OpenAI-compatible upstream base URL.")
-    parser.add_argument("--upstream-api-key", default="sk-no-key-required")
-    parser.add_argument("--upstream-timeout", type=float, default=120.0)
-    parser.add_argument("--stream-heartbeat-seconds", type=float, default=5.0, help="Seconds between SSE keepalive comments while waiting for a buffered upstream response.")
+    parser.add_argument("--upstream-api-key")
+    parser.add_argument("--upstream-timeout", type=float)
+    parser.add_argument("--stream-heartbeat-seconds", type=float, help="Seconds between Responses heartbeat events while waiting for a buffered upstream response.")
     parser.add_argument(
         "--normalization-mode",
         choices=["repair", "observe"],
-        default="repair",
         help="repair returns normalized responses; observe records normalizer findings but returns raw upstream responses.",
     )
     parser.add_argument(
         "--upstream-input-mode",
         choices=["auto", "native", "flatten"],
-        default="auto",
         help="auto flattens Responses history that vLLM rejects; native forwards input unchanged; flatten always sends a string transcript upstream.",
     )
     parser.add_argument(
         "--context-policy",
         choices=["full", "spoon"],
-        default="full",
         help="full sends the complete flattened transcript; spoon compacts older Codex history and keeps recent turns exact.",
     )
     parser.add_argument(
         "--context-max-chars",
         type=int,
-        default=60000,
         help="Maximum flattened input characters sent upstream when --context-policy spoon is active.",
     )
     parser.add_argument(
         "--context-recent-items",
         type=int,
-        default=10,
         help="Number of newest Responses input items kept exact when --context-policy spoon is active.",
     )
     parser.add_argument(
         "--instruction-policy",
         choices=["full", "auto", "digest"],
-        default="auto",
         help="full forwards Codex instructions unchanged; auto/digest replace oversized instructions with an Open Gate digest.",
     )
     parser.add_argument(
         "--tool-schema-policy",
         choices=["full", "auto", "compact"],
-        default="auto",
         help="full forwards tool schemas unchanged; auto/compact trim oversized schema descriptions before forwarding upstream.",
     )
-    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--quiet", action="store_true", default=None)
+    parser.add_argument("--no-banner", action="store_true", default=None, help="Skip the startup settings banner.")
     args = parser.parse_args()
-    if args.stream_heartbeat_seconds <= 0:
-        parser.error("--stream-heartbeat-seconds must be greater than 0")
-    if args.context_max_chars < 4000:
-        parser.error("--context-max-chars must be at least 4000")
-    if args.context_recent_items < 1:
-        parser.error("--context-recent-items must be at least 1")
 
-    config = {
-        "capture_dir": args.capture_dir,
-        "model": args.model,
-        "text": args.text,
-        "fixture": args.fixture,
-        "upstream_base_url": args.upstream_base_url,
-        "upstream_api_key": args.upstream_api_key,
-        "upstream_timeout": args.upstream_timeout,
-        "normalization_mode": args.normalization_mode,
-        "upstream_input_mode": args.upstream_input_mode,
-        "context_policy": args.context_policy,
-        "context_max_chars": args.context_max_chars,
-        "context_recent_items": args.context_recent_items,
-        "instruction_policy": args.instruction_policy,
-        "tool_schema_policy": args.tool_schema_policy,
-        "stream_heartbeat_seconds": args.stream_heartbeat_seconds,
-        "quiet": args.quiet,
-    }
-    server = CaptureServer((args.host, args.port), Handler, config)
-    print(f"open-gate listening on http://{args.host}:{args.port}/v1", flush=True)
+    config_path = discover_config_path(args.config)
+    try:
+        file_values = load_config_file(config_path)
+    except (FileNotFoundError, tomllib.TOMLDecodeError) as exc:
+        parser.error(str(exc))
+    cli_values = {key: value for key, value in vars(args).items() if key != "config" and value is not None}
+    config = merge_config(file_values, cli_values)
+    config["config_path"] = str(config_path) if config_path else "<none>"
+
+    if float(config["stream_heartbeat_seconds"]) <= 0:
+        parser.error("--stream-heartbeat-seconds must be greater than 0")
+    if int(config["context_max_chars"]) < 4000:
+        parser.error("--context-max-chars must be at least 4000")
+    if int(config["context_recent_items"]) < 1:
+        parser.error("--context-recent-items must be at least 1")
+    try:
+        resolve_model(config)
+    except RuntimeError as exc:
+        parser.error(str(exc))
+
+    server = CaptureServer((str(config["host"]), int(config["port"])), Handler, config)
+    print_startup_banner(config)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

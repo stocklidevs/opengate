@@ -1,0 +1,33 @@
+{
+  "name": "codex_live_software_build",
+  "description": "Live Codex suite that asks a local model behind Open Gate to build small, useful software artifacts with real files and lightweight self-checks.",
+  "cases": [
+    {
+      "id": "expense_cli",
+      "category": "software_build_cli",
+      "cwd": "expense-cli",
+      "expected_tools": [
+        "shell"
+      ],
+      "prompt": "Build a small no-dependency Python command-line tool for personal CSV expense analysis. Work only in this folder. Create expense_report.py, sample_expenses.csv, and README.md. The CLI should accept a CSV path, print total spend, totals by category, and totals by month, and support --category NAME to filter. Run at least one command against the sample CSV and fix any errors you find. Keep the final answer short and include the commands you ran."
+    },
+    {
+      "id": "incident_log_triage",
+      "category": "software_build_cli",
+      "cwd": "incident-log-triage",
+      "expected_tools": [
+        "shell"
+      ],
+      "prompt": "Build a no-dependency Python CLI for incident log triage. Work only in this folder. Create log_triage.py, sample_app.log, and README.md. The tool should parse lines with ISO timestamps and levels like INFO, WARN, ERROR, summarize counts by level, show the top repeated error messages, support --since YYYY-MM-DD, and support --json. Run at least two sample commands and fix any errors you find. Keep the final answer short and include the commands you ran."
+    },
+    {
+      "id": "habit_tracker_web",
+      "category": "software_build_web",
+      "cwd": "habit-tracker-web",
+      "expected_tools": [
+        "shell"
+      ],
+      "prompt": "Build a polished single-file habit tracker web app. Work only in this folder. Everything must be in index.html with no frameworks or external assets. It should let a user add habits, mark today complete, show a simple 7-day streak grid, delete habits, persist to localStorage, and look good on desktop and mobile. Add a tiny inline smoke test script or simple self-check comment, then verify the file exists and contains the expected app sections. Keep the final answer short and include the verification commands you ran."
+    }
+  ]
+}

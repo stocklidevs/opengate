@@ -2,15 +2,16 @@ param(
     [int]$Port = 8765,
     [string]$HostName = "127.0.0.1",
     [string]$UpstreamBaseUrl = "http://127.0.0.1:8001/v1",
-    [string]$Model = "Qwen3-Coder-Next",
+    [string]$Model = "auto",
     [string]$CaptureDir = "captures",
-    [double]$StreamHeartbeatSeconds = 5.0,
+    [double]$UpstreamTimeoutSeconds = 420.0,
+    [double]$StreamHeartbeatSeconds = 2.0,
     [ValidateSet("repair", "observe")]
     [string]$Mode = "repair",
     [ValidateSet("full", "spoon")]
-    [string]$ContextPolicy = "full",
+    [string]$ContextPolicy = "spoon",
     [int]$ContextMaxChars = 60000,
-    [int]$ContextRecentItems = 10,
+    [int]$ContextRecentItems = 12,
     [ValidateSet("full", "auto", "digest")]
     [string]$InstructionPolicy = "auto",
     [ValidateSet("full", "auto", "compact")]
@@ -27,6 +28,7 @@ python -m open_gate.server `
     --model $Model `
     --capture-dir $CaptureDir `
     --upstream-base-url $UpstreamBaseUrl `
+    --upstream-timeout $UpstreamTimeoutSeconds `
     --stream-heartbeat-seconds $StreamHeartbeatSeconds `
     --normalization-mode $Mode `
     --context-policy $ContextPolicy `

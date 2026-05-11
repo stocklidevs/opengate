@@ -58,7 +58,11 @@ def iter_codex_paths(codex_dir: Path | None) -> list[Path]:
         return [codex_dir]
     if not codex_dir.exists():
         return []
-    return sorted(path for path in codex_dir.rglob("*") if path.suffix.lower() in {".jsonl", ".log", ".txt"})
+    return sorted(
+        path
+        for path in codex_dir.rglob("*")
+        if path.suffix.lower() in {".jsonl", ".log", ".txt"} and not path.name.startswith("last-")
+    )
 
 
 def summarize_capture(path: Path) -> JsonObject:
@@ -96,8 +100,13 @@ def summarize_capture(path: Path) -> JsonObject:
         "request_stream": bool(request.get("stream")),
         "blocked_by_policy": "blocked by policy" in raw_text.lower(),
         "repairs": len(normalization.get("structured_argument_repairs") or []),
+        "text_tool_call_repairs": len(normalization.get("text_tool_call_repairs") or []),
         "stripped_text_items": int(normalization.get("stripped_text_items") or 0),
         "suppressed_structured_calls": len(normalization.get("suppressed_structured_calls") or []),
+        "policy_suppressed_structured_calls": len(normalization.get("policy_suppressed_structured_calls") or []),
+        "command_quality_suppressed_structured_calls": len(
+            normalization.get("command_quality_suppressed_structured_calls") or []
+        ),
         "promoted_tool_calls": len(normalization.get("promoted_tool_calls") or []),
         "invalid_tool_calls": len(normalization.get("invalid_tool_calls") or []),
         "upstream": upstream_analysis,
@@ -187,7 +196,7 @@ def summarize(captures: list[JsonObject], codex_runs: list[JsonObject]) -> JsonO
     return {
         "proxy_exchanges": total_captures,
         "upstream_errors": sum(1 for item in captures if item.get("upstream_status") and item["upstream_status"] >= 400),
-        "captures_with_repairs": sum(1 for item in captures if item.get("repairs")),
+        "captures_with_repairs": sum(1 for item in captures if item.get("repairs") or item.get("text_tool_call_repairs")),
         "flattened_upstream_requests": sum(1 for item in captures if item.get("upstream_input_mode") == "flattened"),
         "spoon_context_requests": sum(1 for item in captures if item.get("context_policy") == "spoon"),
         "max_flattened_chars": max(flattened_sizes) if flattened_sizes else 0,
@@ -198,9 +207,16 @@ def summarize(captures: list[JsonObject], codex_runs: list[JsonObject]) -> JsonO
         "average_proxy_duration_seconds": round(sum(durations) / len(durations), 3) if durations else 0.0,
         "max_proxy_duration_seconds": round(max(durations), 3) if durations else 0.0,
         "structured_argument_repairs": sum(int(item.get("repairs") or 0) for item in captures),
+        "text_tool_call_repairs": sum(int(item.get("text_tool_call_repairs") or 0) for item in captures),
         "stripped_text_items": sum(int(item.get("stripped_text_items") or 0) for item in captures),
         "promoted_tool_calls": sum(int(item.get("promoted_tool_calls") or 0) for item in captures),
         "suppressed_structured_calls": sum(int(item.get("suppressed_structured_calls") or 0) for item in captures),
+        "policy_suppressed_structured_calls": sum(
+            int(item.get("policy_suppressed_structured_calls") or 0) for item in captures
+        ),
+        "command_quality_suppressed_structured_calls": sum(
+            int(item.get("command_quality_suppressed_structured_calls") or 0) for item in captures
+        ),
         "blocked_by_policy_captures": sum(1 for item in captures if item.get("blocked_by_policy")),
         "upstream_text_leaks": sum(1 for item in captures if item["upstream"].get("text_leaked")),
         "returned_text_leaks": sum(1 for item in captures if item["returned"].get("text_leaked")),

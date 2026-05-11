@@ -12,6 +12,57 @@ JsonObject = dict[str, Any]
 POWERSHELL_COMMAND_FLAGS = {"-command", "-c", "/command", "/c"}
 POWERSHELL_EXE_RE = re.compile(r"(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$", re.IGNORECASE)
 WINDOWS_POWERSHELL_EXE_RE = re.compile(r"(?:^|[\\/])powershell(?:\.exe)?$", re.IGNORECASE)
+POWERSHELL_CMDLET_VERBS = {
+    "add",
+    "clear",
+    "compare",
+    "convert",
+    "convertfrom",
+    "convertto",
+    "copy",
+    "debug",
+    "disable",
+    "enable",
+    "enter",
+    "exit",
+    "export",
+    "find",
+    "format",
+    "get",
+    "group",
+    "import",
+    "invoke",
+    "join",
+    "measure",
+    "move",
+    "new",
+    "out",
+    "pop",
+    "push",
+    "read",
+    "receive",
+    "remove",
+    "rename",
+    "resolve",
+    "restart",
+    "resume",
+    "select",
+    "send",
+    "set",
+    "show",
+    "sort",
+    "split",
+    "start",
+    "stop",
+    "suspend",
+    "tee",
+    "test",
+    "trace",
+    "wait",
+    "where",
+    "write",
+}
+POWERSHELL_OPERATOR_TOKENS = {"|", ">", ">>", "2>", "2>>", "2>&1", "<", ";", "&&", "||"}
 IMAGE_EXTENSIONS = {
     ".avif",
     ".bmp",
@@ -23,6 +74,30 @@ IMAGE_EXTENSIONS = {
     ".tiff",
     ".webp",
 }
+ARTIFACT_EXTENSIONS = {
+    ".css",
+    ".csv",
+    ".html",
+    ".htm",
+    ".js",
+    ".json",
+    ".jsx",
+    ".md",
+    ".mjs",
+    ".ps1",
+    ".py",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+EMPTY_ARTIFACT_WRITE_DIAGNOSTIC = (
+    "Open Gate blocked an empty file write. Write the complete requested artifact content in one valid tool call "
+    "instead of truncating or creating an empty placeholder first."
+)
 
 
 def inspect_tool_calls(calls: list[Any]) -> list[JsonObject]:
@@ -53,7 +128,7 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
         ]
 
     if isinstance(command, str):
-        repaired = ["powershell.exe", "-Command", command]
+        repaired = parse_shell_array_string(command) or ["powershell.exe", "-Command", command]
         nested = repair_shell_command_argument(repaired)
         return [
             {
@@ -121,9 +196,40 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
             }
         )
 
-    if is_powershell_command_vector(command) and len(command) >= 3:
-        script = command[2]
-        issues.extend(inspect_powershell_script(script, arguments, command, source))
+    repaired = repair_split_powershell_command(command)
+    if repaired is not None:
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "split_powershell_command",
+                "severity": "warning",
+                "source": source,
+                "repairable": True,
+                "command": command,
+                "repaired_command": repaired,
+                "message": "PowerShell -Command should receive one script string; extra array items should be joined into that script.",
+            }
+        )
+
+    repaired = repair_direct_powershell_cmdlet(command)
+    if repaired is not None:
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "direct_powershell_cmdlet",
+                "severity": "warning",
+                "source": source,
+                "repairable": True,
+                "command": command,
+                "repaired_command": repaired,
+                "message": "PowerShell cmdlets such as Get-ChildItem, Set-Content, or Write-Host must run through powershell.exe -Command.",
+            }
+        )
+
+    effective_command = repair_direct_powershell_cmdlet(command) or repair_split_powershell_command(command) or command
+    if is_powershell_command_vector(effective_command) and len(effective_command) >= 3:
+        script = effective_command[2]
+        issues.extend(inspect_powershell_script(script, arguments, effective_command, source))
     return issues
 
 
@@ -166,6 +272,31 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
             }
         )
 
+    if convert_bare_here_string_to_set_content(script) is not None:
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "bare_here_string_file_write",
+                "severity": "error",
+                "source": source,
+                "repairable": True,
+                "command": command,
+                "message": "The command contains file content in a PowerShell here-string but omitted the Set-Content cmdlet.",
+            }
+        )
+
+    if looks_like_malformed_json_array_command(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "malformed_json_array_command",
+                "severity": "error",
+                "source": source,
+                "command": command,
+                "message": "The PowerShell script looks like a malformed JSON command array instead of an executable script.",
+            }
+        )
+
     if contains_python_compound_one_liner(script):
         issues.append(
             {
@@ -202,12 +333,27 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
             }
         )
 
+    empty_write_targets = empty_artifact_write_targets(script)
+    if empty_write_targets:
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "empty_artifact_write",
+                "severity": "error",
+                "source": source,
+                "repairable": True,
+                "command": command,
+                "targets": empty_write_targets,
+                "message": "The command creates or truncates a requested artifact to empty content instead of writing the finished file.",
+            }
+        )
+
     if contains_unbounded_web_fetch(script):
         issues.append(
             {
                 "tool": "shell",
                 "issue": "unbounded_web_fetch",
-                "severity": "warning",
+                "severity": "error",
                 "source": source,
                 "command": command,
                 "message": "The command appears to fetch and print a whole web page; prefer bounded metadata or a small excerpt.",
@@ -312,13 +458,37 @@ def repair_shell_arguments(arguments: JsonObject) -> JsonObject | None:
         command = repaired_command
         changed = True
 
+    repaired_command = repair_split_powershell_command(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        command = repaired_command
+        changed = True
+
+    repaired_command = repair_direct_powershell_cmdlet(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        command = repaired_command
+        changed = True
+
     repaired_command = repair_bad_here_string_command(command)
     if repaired_command is not None:
         repaired["command"] = repaired_command
         changed = True
         command = repaired_command
 
+    repaired_command = repair_bare_here_string_file_write_command(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        changed = True
+        command = repaired_command
+
     repaired_command = repair_bash_heredoc_command(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        changed = True
+        command = repaired_command
+
+    repaired_command = repair_empty_artifact_write_command(command)
     if repaired_command is not None:
         repaired["command"] = repaired_command
         changed = True
@@ -330,7 +500,7 @@ def repair_shell_arguments(arguments: JsonObject) -> JsonObject | None:
 
 def repair_shell_command_argument(command: Any) -> list[str] | None:
     if isinstance(command, str):
-        return None
+        return parse_shell_array_string(command)
     if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
         return None
 
@@ -360,6 +530,17 @@ def repair_bad_here_string_command(command: Any) -> list[str] | None:
     return [*command[:2], repaired_script, *command[3:]]
 
 
+def repair_bare_here_string_file_write_command(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not is_powershell_command_vector(command) or len(command) < 3:
+        return None
+    repaired_script = convert_bare_here_string_to_set_content(command[2])
+    if repaired_script is None:
+        return None
+    return [*command[:2], repaired_script, *command[3:]]
+
+
 def repair_bash_heredoc_command(command: Any) -> list[str] | None:
     if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
         return None
@@ -369,6 +550,49 @@ def repair_bash_heredoc_command(command: Any) -> list[str] | None:
     if repaired_script is None:
         return None
     return [*command[:2], repaired_script, *command[3:]]
+
+
+def repair_empty_artifact_write_command(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not is_powershell_command_vector(command) or len(command) < 3:
+        return None
+    if not empty_artifact_write_targets(command[2]):
+        return None
+    diagnostic = "Write-Output " + quote_powershell_token(EMPTY_ARTIFACT_WRITE_DIAGNOSTIC)
+    return [*command[:2], diagnostic, *command[3:]]
+
+
+def repair_split_powershell_command(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not is_powershell_command_vector(command) or len(command) <= 3:
+        return None
+    return [command[0], command[1], join_powershell_command_tokens(command[2:])]
+
+
+def repair_direct_powershell_cmdlet(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not command or is_powershell_command_vector(command):
+        return None
+    if not looks_like_powershell_cmdlet(command[0]):
+        return None
+    return ["powershell.exe", "-Command", join_powershell_command_tokens(command)]
+
+
+def join_powershell_command_tokens(tokens: list[str]) -> str:
+    return " ".join(quote_powershell_token(token) for token in tokens).strip()
+
+
+def quote_powershell_token(token: str) -> str:
+    if token == "":
+        return "''"
+    if token in POWERSHELL_OPERATOR_TOKENS:
+        return token
+    if re.fullmatch(r"[A-Za-z0-9_./:\\-]+", token):
+        return token
+    return "'" + token.replace("'", "''") + "'"
 
 
 def convert_bash_heredoc_to_powershell(script: str) -> str | None:
@@ -392,6 +616,30 @@ def convert_bash_heredoc_to_powershell(script: str) -> str | None:
     if "\n'@\n" in f"\n{body}\n":
         return None
     return f"$html = @'\n{body}\n'@; Set-Content -LiteralPath '{target}' -Value $html -Encoding UTF8"
+
+
+def convert_bare_here_string_to_set_content(script: str) -> str | None:
+    match = re.match(
+        r"^\s*@(?P<quote>['\"])\r?\n(?P<body>.*?)\r?\n(?P=quote)@\s+(?P<rest>.+?)\s*$",
+        script,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return None
+    body = match.group("body")
+    rest = match.group("rest")
+    target = named_powershell_path_argument(rest)
+    if not target or not looks_like_artifact_path(target):
+        return None
+    marker = "'" if "\n'@\n" not in f"\n{body}\n" else '"'
+    if f"\n{marker}@\n" in f"\n{body}\n":
+        return None
+    encoding = named_powershell_argument(rest, "-Encoding") or "UTF8"
+    return (
+        f"$html = @{marker}\n{body}\n{marker}@; "
+        f"Set-Content -LiteralPath {quote_powershell_token(target)} -Value $html "
+        f"-Encoding {quote_powershell_token(encoding)}"
+    )
 
 
 def collapse_nested_powershell_array(command: list[str]) -> list[str] | None:
@@ -436,15 +684,93 @@ def extract_nested_powershell_script(value: str) -> str | None:
 
 
 def extract_json_array_powershell_script(value: str) -> str | None:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, list) or any(not isinstance(part, str) for part in parsed):
+    parsed = parse_shell_array_string(value)
+    if parsed is None:
         return None
     if not is_powershell_command_vector(parsed) or len(parsed) < 3:
         return None
     return " ".join(parsed[2:]).strip()
+
+
+def parse_shell_array_string(value: str) -> list[str] | None:
+    for candidate in json_array_parse_candidates(value):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list) and all(isinstance(part, str) for part in parsed):
+            return parsed
+    return parse_relaxed_json_string_array(value)
+
+
+def parse_relaxed_json_string_array(value: str) -> list[str] | None:
+    index = skip_whitespace(value, 0)
+    if index >= len(value) or value[index] != "[":
+        return None
+    index += 1
+    out: list[str] = []
+    while True:
+        index = skip_whitespace(value, index)
+        if index >= len(value):
+            return None
+        if value[index] == "]":
+            return out
+        parsed = parse_relaxed_json_string(value, index)
+        if parsed is None:
+            return None
+        item, index = parsed
+        out.append(item)
+        index = skip_whitespace(value, index)
+        if index >= len(value):
+            return None
+        if value[index] == ",":
+            index += 1
+            continue
+        if value[index] == "]":
+            return out
+        return None
+
+
+def parse_relaxed_json_string(value: str, index: int) -> tuple[str, int] | None:
+    if index >= len(value) or value[index] != '"':
+        return None
+    index += 1
+    out: list[str] = []
+    while index < len(value):
+        char = value[index]
+        if char == '"':
+            return "".join(out), index + 1
+        if char == "\\" and index + 1 < len(value):
+            escaped = value[index + 1]
+            if escaped in {'"', "\\", "/", "'"}:
+                out.append(escaped)
+            elif escaped in {"n", "N"}:
+                out.append("\n")
+            elif escaped == "r":
+                out.append("\r")
+            elif escaped == "t":
+                out.append("\t")
+            else:
+                out.append(escaped)
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return None
+
+
+def skip_whitespace(value: str, index: int) -> int:
+    while index < len(value) and value[index].isspace():
+        index += 1
+    return index
+
+
+def json_array_parse_candidates(value: str) -> list[str]:
+    candidates = [value]
+    repaired_newlines = value.replace("\\N", "\\n")
+    if repaired_newlines != value:
+        candidates.append(repaired_newlines)
+    return candidates
 
 
 def split_command_line(value: str) -> list[str]:
@@ -471,6 +797,16 @@ def is_windows_powershell_executable(value: str) -> bool:
     return bool(WINDOWS_POWERSHELL_EXE_RE.search(value.strip().strip("\"'")))
 
 
+def looks_like_powershell_cmdlet(value: str) -> bool:
+    stripped = value.strip().strip("\"'")
+    if "\\" in stripped or "/" in stripped or "." in path_last_segment(stripped):
+        return False
+    if "-" not in stripped:
+        return False
+    verb = stripped.split("-", 1)[0].lower()
+    return verb in POWERSHELL_CMDLET_VERBS
+
+
 def contains_powershell_chain_operator(script: str) -> bool:
     return bool(re.search(r"(?<!&)&&(?!&)", strip_powershell_here_strings(script)))
 
@@ -486,6 +822,19 @@ def contains_bash_heredoc(script: str) -> bool:
 
 def contains_bad_here_string_header(script: str) -> bool:
     return bool(re.search(r"@['\"]`n\S", script))
+
+
+def looks_like_malformed_json_array_command(script: str) -> bool:
+    stripped = script.strip()
+    if not stripped.startswith("["):
+        return False
+    if "powershell" not in stripped.lower() and "-command" not in stripped.lower():
+        return False
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return True
+    return not isinstance(parsed, list)
 
 
 def contains_python_compound_one_liner(script: str) -> bool:
@@ -504,6 +853,97 @@ def contains_html_echo_without_file_write(script: str) -> bool:
     if not re.search(r"^\s*(?:echo|write-output)\b", script, re.IGNORECASE):
         return False
     return not re.search(r"(>\s*['\"]?[^;&|]*index\.html|set-content|out-file)", script, re.IGNORECASE)
+
+
+def empty_artifact_write_targets(script: str) -> list[str]:
+    targets: list[str] = []
+    targets.extend(empty_write_all_text_targets(script))
+    targets.extend(empty_set_content_targets(script))
+    return dedupe_keep_order([target for target in targets if looks_like_artifact_path(target)])
+
+
+def dedupe_keep_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def empty_write_all_text_targets(script: str) -> list[str]:
+    targets: list[str] = []
+    pattern = re.compile(
+        r"\[System\.IO\.File\]::WriteAllText\s*\(\s*(?P<target>.+?)\s*,\s*(?P<value>''|\"\"|@'\s*'@|@\"\s*\"@)\s*\)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(script):
+        expression = match.group("target")
+        target = last_quoted_string(expression) or expression.strip()
+        if target:
+            targets.append(target)
+    return targets
+
+
+def empty_set_content_targets(script: str) -> list[str]:
+    targets: list[str] = []
+    for segment in powershell_command_segments(script):
+        if not re.search(r"\bSet-Content\b", segment, re.IGNORECASE):
+            continue
+        target = named_powershell_path_argument(segment)
+        if not target:
+            positional = re.search(
+                r"\bSet-Content\b\s+(?P<target>\"[^\"]+\"|'[^']+'|\S+)\s+(?:''|\"\")(?:\s|$)",
+                segment,
+                re.IGNORECASE | re.DOTALL,
+            )
+            target = strip_outer_quotes(positional.group("target")) if positional else ""
+        if not target:
+            continue
+        if re.search(r"(?<!\S)-Value\s+(?:''|\"\")(?:\s|$)", segment, re.IGNORECASE | re.DOTALL):
+            targets.append(target)
+    return targets
+
+
+def powershell_command_segments(script: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[;\r\n]+", strip_powershell_here_strings(script)) if part.strip()]
+
+
+def named_powershell_path_argument(segment: str) -> str:
+    return named_powershell_argument(segment, "-LiteralPath", "-Path")
+
+
+def named_powershell_argument(segment: str, *names: str) -> str:
+    if not names:
+        return ""
+    alternatives = "|".join(re.escape(name) for name in names)
+    match = re.search(
+        rf"(?<!\S)(?:{alternatives})\s+(?P<value>\"[^\"]+\"|'[^']+'|\S+)",
+        segment,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return strip_outer_quotes(match.group("value")) if match else ""
+
+
+def last_quoted_string(value: str) -> str:
+    matches = re.findall(r"'([^']*)'|\"([^\"]*)\"", value)
+    for single, double in reversed(matches):
+        return single or double
+    return ""
+
+
+def looks_like_artifact_path(value: str) -> bool:
+    extension = path_extension(value)
+    return extension in ARTIFACT_EXTENSIONS
+
+
+def path_extension(path: str) -> str:
+    last = path_last_segment(path)
+    if "." not in last:
+        return ""
+    return "." + last.rsplit(".", 1)[1].lower()
 
 
 def contains_unbounded_web_fetch(script: str) -> bool:
@@ -552,10 +992,7 @@ def path_last_segment(value: str) -> str:
 
 
 def image_extension(path: str) -> str:
-    last = path_last_segment(path)
-    if "." not in last:
-        return ""
-    return "." + last.rsplit(".", 1)[1].lower()
+    return path_extension(path)
 
 
 def strip_outer_quotes(value: str) -> str:

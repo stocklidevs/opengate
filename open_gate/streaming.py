@@ -10,19 +10,23 @@ from typing import Any, Iterable
 JsonObject = dict[str, Any]
 
 
-def response_stream_events(response: JsonObject) -> list[tuple[str, JsonObject]]:
+def response_stream_events(
+    response: JsonObject,
+    *,
+    include_initial: bool = True,
+    start_sequence: int = 0,
+) -> list[tuple[str, JsonObject]]:
     response = normalise_response_for_stream(response)
     response_id = response["id"]
-    started = deepcopy(response)
-    started["status"] = "in_progress"
-    started["output"] = []
 
     events: list[tuple[str, JsonObject]] = []
-    seq = 0
-    events.append(("response.created", {"type": "response.created", "sequence_number": seq, "response": started}))
-    seq += 1
-    events.append(("response.in_progress", {"type": "response.in_progress", "sequence_number": seq, "response": started}))
-    seq += 1
+    seq = start_sequence
+    if include_initial:
+        started = started_response_from_response(response)
+        events.append(("response.created", {"type": "response.created", "sequence_number": seq, "response": started}))
+        seq += 1
+        events.append(("response.in_progress", {"type": "response.in_progress", "sequence_number": seq, "response": started}))
+        seq += 1
 
     for output_index, item in enumerate(response.get("output") or []):
         added_item = item_for_added_event(item)
@@ -69,6 +73,56 @@ def response_stream_events(response: JsonObject) -> list[tuple[str, JsonObject]]
     terminal_event = "response.failed" if completed["status"] == "failed" else "response.completed"
     events.append((terminal_event, {"type": terminal_event, "sequence_number": seq, "response": completed}))
     return events
+
+
+def started_response_from_response(response: JsonObject) -> JsonObject:
+    started = deepcopy(response)
+    started["status"] = "in_progress"
+    started["output"] = []
+    return started
+
+
+def started_response(response_id: str, model: Any = None, instructions: Any = None) -> JsonObject:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "in_progress",
+        "background": False,
+        "error": None,
+        "incomplete_details": None,
+        "instructions": instructions,
+        "max_output_tokens": None,
+        "model": model,
+        "output": [],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "store": True,
+        "temperature": None,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "truncation": "disabled",
+        "usage": None,
+        "user": None,
+        "metadata": {},
+    }
+
+
+def response_created_event(response: JsonObject, sequence_number: int) -> tuple[str, JsonObject]:
+    return (
+        "response.created",
+        {"type": "response.created", "sequence_number": sequence_number, "response": response},
+    )
+
+
+def response_in_progress_event(response: JsonObject, sequence_number: int) -> tuple[str, JsonObject]:
+    return (
+        "response.in_progress",
+        {"type": "response.in_progress", "sequence_number": sequence_number, "response": response},
+    )
 
 
 def serialise_sse(events: Iterable[tuple[str, JsonObject]]) -> bytes:

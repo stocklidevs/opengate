@@ -34,6 +34,8 @@ vllm serve "cyankiwi/Qwen3-Coder-Next-AWQ-4bit" \
   --performance-mode interactivity
 ```
 
+OpenGate `0.6.7+` can use that endpoint directly. Set `model = "auto"` in `opengate.toml`; on startup OpenGate detects the served model and rewrites Codex's forwarded `model` field so a stale Codex profile does not cause vLLM "model does not exist" errors.
+
 This exposes an OpenAI-compatible endpoint at:
 
 ```text
@@ -77,7 +79,7 @@ The first direct benchmark showed that vLLM returned HTTP 200 responses, but GLM
 
 Open Gate also adapts Codex's multi-turn Responses input for vLLM. A first user-only turn can be accepted natively, but later Codex turns may include assistant history, `function_call`, and `function_call_output` items. vLLM can reject those with a 400 validation error. Open Gate's default `--upstream-input-mode auto` detects that shape and sends vLLM a flattened transcript while preserving the normal Responses API contract for Codex.
 
-Codex sends streamed `/v1/responses` requests, but Open Gate intentionally asks vLLM for `stream: false` so it can inspect and repair the full model response before Codex sees it. Long Qwen generations can otherwise leave Codex staring at a silent socket for roughly a minute. Open Gate now sends SSE heartbeat comments every `--stream-heartbeat-seconds` while waiting, then replays the normalized response as standard Responses SSE events.
+Codex sends streamed `/v1/responses` requests, but Open Gate intentionally asks vLLM for `stream: false` so it can inspect and repair the full model response before Codex sees it. Long Qwen/GLM generations can otherwise leave Codex staring at a silent socket until Codex retries the turn. Open Gate now sends real Responses `response.in_progress` heartbeat events every `--stream-heartbeat-seconds` while waiting, then replays the normalized response as standard Responses SSE events.
 
 The request-size probe used `POST /tokenize` to avoid generation. The server accepted JSON request bodies of approximately:
 

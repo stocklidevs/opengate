@@ -5,6 +5,8 @@ captures/*.json
 logs/*.log
 logs/*.out
 logs/*.err
+opengate.toml
+opengate.local.toml
 runs/*.json
 runs/*/captures/
 runs/codex-live/

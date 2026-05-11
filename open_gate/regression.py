@@ -98,6 +98,11 @@ def fixture_failures(result: JsonObject, expected: JsonObject) -> list[str]:
     actual_repairs = len(result["normalization"].get("structured_argument_repairs") or [])
     if actual_repairs < minimum_repairs:
         failures.append(f"expected at least {minimum_repairs} structured argument repair(s), got {actual_repairs}")
+
+    minimum_text_repairs = int(expected.get("minimum_text_tool_call_repairs") or 0)
+    actual_text_repairs = len(result["normalization"].get("text_tool_call_repairs") or [])
+    if actual_text_repairs < minimum_text_repairs:
+        failures.append(f"expected at least {minimum_text_repairs} text tool-call repair(s), got {actual_text_repairs}")
     return failures
 
 

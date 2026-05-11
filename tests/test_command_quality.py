@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from open_gate.command_quality import inspect_tool_calls, repair_shell_arguments, repair_shell_command_argument
+from open_gate.command_quality import (
+    inspect_tool_calls,
+    parse_shell_array_string,
+    repair_shell_arguments,
+    repair_shell_command_argument,
+)
 from open_gate.linter import ToolCall
 
 
@@ -42,6 +47,39 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertEqual(repaired, ["powershell.exe", "-Command", "Get-ChildItem -Force | Measure-Object"])
 
+    def test_repairs_split_powershell_command_arguments(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": ["powershell.exe", "-Command", "Set-Content", "-Path", "index.html", "-Value", "ready"]},
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments(call.arguments)
+
+        self.assertIn("split_powershell_command", {issue["issue"] for issue in issues})
+        self.assertEqual(
+            repaired["command"],
+            ["powershell.exe", "-Command", "Set-Content -Path index.html -Value ready"],
+        )
+
+    def test_repairs_direct_powershell_cmdlet_arguments(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": ["Write-Host", "loading"]},
+            source="glm_tool_call_tag",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments(call.arguments)
+
+        self.assertIn("direct_powershell_cmdlet", {issue["issue"] for issue in issues})
+        self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "Write-Host loading"])
+
     def test_leaves_clean_command_array_alone(self) -> None:
         repaired = repair_shell_command_argument(["powershell.exe", "-Command", "Get-ChildItem -Force"])
 
@@ -57,6 +95,31 @@ class CommandQualityTests(unittest.TestCase):
         )
 
         self.assertEqual(repaired, ["powershell.exe", "-Command", "Get-ChildItem -Force"])
+
+    def test_repairs_json_array_encoded_powershell_command_with_uppercase_newline_escape(self) -> None:
+        repaired = repair_shell_command_argument(
+            [
+                "powershell.exe",
+                "-Command",
+                "[\"powershell.exe\",\"-Command\",\"Set-Content 'log_triage.py' -Value @'\\nimport sys\\N# comment\\n'@\"]",
+            ]
+        )
+
+        self.assertEqual(
+            repaired,
+            ["powershell.exe", "-Command", "Set-Content 'log_triage.py' -Value @'\nimport sys\n# comment\n'@"],
+        )
+
+    def test_parses_relaxed_multiline_shell_array_string(self) -> None:
+        parsed = parse_shell_array_string(
+            '["powershell", "-Command", "[System.IO.File]::WriteAllText(\'index.html\', @\'\n'
+            '<!DOCTYPE html>\n<html lang=\\"en\\"></html>\n'
+            '\'@, \\"utf8\\")"]'
+        )
+
+        self.assertEqual(parsed[0:2], ["powershell", "-Command"])
+        self.assertIn("<!DOCTYPE html>", parsed[2])
+        self.assertIn('<html lang="en">', parsed[2])
 
     def test_detects_windows_powershell_chain_operator(self) -> None:
         call = ToolCall(
@@ -185,6 +248,54 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertEqual(issues[0]["issue"], "html_echo_without_file_write")
 
+    def test_quarantines_empty_artifact_write(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "-Command",
+                    "[System.IO.File]::WriteAllText((Resolve-Path 'index.html').Path, '')",
+                ]
+            },
+            source="glm_tool_call_tag",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments(call.arguments)
+
+        self.assertEqual(issues[0]["issue"], "empty_artifact_write")
+        self.assertEqual(issues[0]["targets"], ["index.html"])
+        self.assertIn("Open Gate blocked an empty file write", repaired["command"][2])
+
+    def test_quarantines_empty_set_content_artifact_write(self) -> None:
+        repaired = repair_shell_arguments(
+            {"command": ["powershell.exe", "-Command", "Set-Content -Path index.html -Value ''"]}
+        )
+
+        self.assertIn("Open Gate blocked an empty file write", repaired["command"][2])
+
+    def test_allows_nonempty_artifact_write(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "[System.IO.File]::WriteAllText('index.html', '<!DOCTYPE html><html></html>')",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertNotIn("empty_artifact_write", {issue["issue"] for issue in issues})
+
     def test_detects_unbounded_web_fetch(self) -> None:
         call = ToolCall(
             name="shell",
@@ -204,6 +315,25 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertIn("unbounded_web_fetch", {issue["issue"] for issue in issues})
 
+    def test_detects_malformed_json_array_command(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "[\"powershell.exe\", \"-Command\", \"Set-Content\", \"-Path\", \"index.html\";",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("malformed_json_array_command", {issue["issue"] for issue in issues})
+
     def test_repairs_bash_heredoc_for_powershell(self) -> None:
         repaired = repair_shell_arguments(
             {
@@ -217,6 +347,28 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertIn("Set-Content -LiteralPath 'index.html'", repaired["command"][2])
         self.assertIn("<!DOCTYPE html>", repaired["command"][2])
+
+    def test_repairs_bare_here_string_file_write_for_powershell(self) -> None:
+        command = [
+            "powershell.exe",
+            "-Command",
+            "@'\n<!DOCTYPE html>\n<html></html>\n'@ -Path '.\\index.html' -Encoding UTF8",
+        ]
+        call = ToolCall(
+            name="shell",
+            arguments={"command": command},
+            source="glm_tool_call_tag",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments({"command": command})
+
+        self.assertIn("bare_here_string_file_write", {issue["issue"] for issue in issues})
+        self.assertIn("Set-Content -LiteralPath", repaired["command"][2])
+        self.assertIn("<!DOCTYPE html>", repaired["command"][2])
+        self.assertIn("-Value $html", repaired["command"][2])
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ Use this checklist before declaring a new open coding model compatible with Code
 ## 2. Verify Basic API Shape
 
 - `GET /v1/models` returns the served model name.
+- OpenGate launched with `model = "auto"` reports the same detected model in `/health`.
 - A simple `/v1/responses` user prompt returns a Responses-shaped object.
 - A simple streamed Codex request receives valid Responses SSE events.
 - Open Gate captures have redacted sensitive headers.
@@ -44,7 +45,7 @@ Use this checklist before declaring a new open coding model compatible with Code
 
 - Use a prompt likely to produce a long upstream generation.
 - Set `--stream-heartbeat-seconds` low for validation, such as `0.2` or `1`.
-- Confirm `stream_heartbeats > 0`, `upstream_errors = 0`, and no Codex timeout.
+- Confirm `stream_heartbeats > 0`, `upstream_errors = 0`, and no Codex timeout. In `0.6.6+`, these heartbeats are Responses lifecycle events, not comment-only keepalives.
 - Treat harness timeouts as stress observations, not known-good passes.
 
 ## 7. Triage Failures
