@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -29,6 +30,30 @@ TOOLS = [
         },
     }
 ]
+UPDATE_PLAN_TOOL = {
+    "type": "function",
+    "name": "update_plan",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "explanation": {"type": "string"},
+            "plan": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "step": {"type": "string"},
+                        "status": {"type": "string"},
+                    },
+                    "required": ["step", "status"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["plan"],
+        "additionalProperties": False,
+    },
+}
 SPAWN_AGENT_TOOL = {
     "type": "function",
     "name": "spawn_agent",
@@ -41,6 +66,7 @@ SPAWN_AGENT_TOOL = {
         "additionalProperties": False,
     },
 }
+WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
 class ProxyNormalizationTests(unittest.TestCase):
@@ -111,6 +137,115 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["output"][0]["name"], "shell")
         self.assertEqual(details["promoted_tool_calls"][0]["source"], "glm_tool_call_tag")
         self.assertEqual(details["stripped_text_items"], 1)
+
+    def test_routes_text_web_search_alias_to_bounded_shell_fetch(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "I'll inspect it."
+                                "<tool_call>web_search<arg_key>external_web_access</arg_key>"
+                                "<arg_value>true</arg_value></tool_call>"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request_with_tools("Look at https://styles.refero.design/ before building.", [*TOOLS, WEB_SEARCH_TOOL]),
+        )
+
+        function_call = next(item for item in normalized["output"] if item.get("type") == "function_call")
+        self.assertEqual(function_call["name"], "shell")
+        arguments = json.loads(function_call["arguments"])
+        self.assertIn("Invoke-WebRequest -Uri $uri", arguments["command"][2])
+        self.assertIn("https://styles.refero.design/", arguments["command"][2])
+        self.assertEqual(details["text_tool_call_repairs"][0]["reason"], "hosted_web_tool_to_shell_metadata")
+        self.assertEqual(details["promoted_tool_calls"][0]["name"], "shell")
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_routes_structured_web_search_to_bounded_shell_fetch(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "web_search",
+                    "arguments": '{"query":"https://styles.refero.design/\\\\\\"}',
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request_with_tools("Look at https://styles.refero.design/ before building.", [*TOOLS, WEB_SEARCH_TOOL]),
+        )
+
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        arguments = json.loads(normalized["output"][0]["arguments"])
+        self.assertIn("https://styles.refero.design/", arguments["command"][2])
+        self.assertNotIn('https://styles.refero.design/\\', arguments["command"][2])
+        self.assertEqual(details["web_tool_alias_repairs"][0]["reason"], "hosted_web_tool_to_shell_metadata")
+        self.assertEqual(details["command_quality_suppressed_structured_calls"], [])
+
+    def test_routes_site_query_web_search_to_bounded_shell_fetch(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "web_search",
+                    "arguments": '{"query":"site:styles.refero.design"}',
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request_with_tools("Summarize https://styles.refero.design/.", [*TOOLS, WEB_SEARCH_TOOL]),
+        )
+
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        arguments = json.loads(normalized["output"][0]["arguments"])
+        self.assertIn("https://styles.refero.design/", arguments["command"][2])
+        self.assertEqual(details["web_tool_alias_repairs"][0]["after_tool"], "shell")
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_no_web_search_tool_keeps_shell_url_guard(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": (
+                        '{"command":["powershell.exe","-Command",'
+                        '"Invoke-WebRequest -Uri \'https://styles.refero.design/\' -UseBasicParsing"]}'
+                    ),
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request("Look at https://styles.refero.design/ before building."),
+        )
+
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertEqual(details["web_tool_alias_repairs"], [])
 
     def test_promotes_top_level_glm_output_text(self) -> None:
         response = {
@@ -509,11 +644,115 @@ class ProxyNormalizationTests(unittest.TestCase):
         }
 
         normalized, details = normalize_responses_response(response, self.request("Inspect the reference site."))
+        arguments = normalized["output"][0]["arguments"]
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertIn("Open Gate blocked an invalid shell command (unbounded_web_fetch)", arguments)
+        self.assertIn("Do not retry that route", arguments)
+        self.assertEqual(details["command_quality_suppressed_structured_calls"][0]["name"], "shell")
+        self.assertIn("quarantined_as", details["command_quality_suppressed_structured_calls"][0])
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_quarantines_structured_command_quality_error_even_with_visible_message(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Let me inspect the site first."}],
+                },
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"(Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing -TimeoutSec 10).Content.Substring(0,3000)\"],\"timeout_ms\":15000}",
+                },
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Build the page."))
 
         self.assertEqual(normalized["output"][0]["type"], "message")
-        self.assertIn("suppressed an invalid tool call", normalized["output"][0]["content"][0]["text"])
+        self.assertEqual(normalized["output"][1]["type"], "function_call")
+        self.assertIn("Open Gate blocked an invalid shell command (unbounded_web_fetch)", normalized["output"][1]["arguments"])
         self.assertEqual(details["command_quality_suppressed_structured_calls"][0]["name"], "shell")
+        self.assertIn("quarantined_as", details["command_quality_suppressed_structured_calls"][0])
         self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_uses_shell_for_structured_command_quality_diagnostic_when_update_plan_exists(self) -> None:
+        request = self.request_with_tools("Inspect the reference site.", [*TOOLS, UPDATE_PLAN_TOOL])
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing | Select-Object -ExpandProperty Content\"]}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, request)
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertIn("Open Gate blocked an invalid shell command", normalized["output"][0]["arguments"])
+        self.assertIn("quarantined_as", details["command_quality_suppressed_structured_calls"][0])
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_adds_diagnostic_tool_call_for_reasoning_only_response(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "reasoning_test",
+                    "type": "reasoning",
+                    "content": [
+                        {
+                            "type": "reasoning_text",
+                            "text": "Now I need to create index.html with the requested scene.",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Create index.html."))
+
+        self.assertEqual(normalized["output"][0]["type"], "reasoning")
+        self.assertEqual(normalized["output"][1]["type"], "function_call")
+        self.assertEqual(normalized["output"][1]["name"], "shell")
+        self.assertIn("reasoning only and no tool call", normalized["output"][1]["arguments"])
+        self.assertEqual(details["actionable_output_repair"]["type"], "diagnostic_tool_call")
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_uses_shell_for_reasoning_only_diagnostic_when_update_plan_exists(self) -> None:
+        request = self.request_with_tools("Create index.html.", [*TOOLS, UPDATE_PLAN_TOOL])
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "reasoning_test",
+                    "type": "reasoning",
+                    "content": [
+                        {
+                            "type": "reasoning_text",
+                            "text": "Now I need to create index.html with the requested scene.",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, request)
+
+        self.assertEqual(normalized["output"][1]["type"], "function_call")
+        self.assertEqual(normalized["output"][1]["name"], "shell")
+        self.assertIn("reasoning only and no tool call", normalized["output"][1]["arguments"])
+        self.assertEqual(details["actionable_output_repair"]["tool"], "shell")
 
     def test_strips_reasoning_glm_tool_call_without_promoting(self) -> None:
         response = {
@@ -643,6 +882,142 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["output"], [])
         self.assertEqual(len(details["suppressed_structured_calls"]), 1)
 
+    def test_quarantines_repeated_external_url_shell_call(self) -> None:
+        request = self.request("Inspect https://styles.refero.design/ once, then create index.html.")
+        request["input"].append(
+            {
+                "type": "function_call",
+                "name": "shell",
+                "call_id": "call_url_once",
+                "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"(Invoke-WebRequest -Uri 'https://styles.refero.design/' -TimeoutSec 10).StatusCode\"]}",
+            }
+        )
+        request["input"].append({"type": "function_call_output", "call_id": "call_url_once", "output": "200"})
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing | Select-Object -ExpandProperty Content\"]}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, request)
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertIn("Open Gate blocked a repeated external URL inspection", normalized["output"][0]["arguments"])
+        self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
+        self.assertEqual(details["command_quality_suppressed_structured_calls"], [])
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_repeated_external_url_non_artifact_ends_with_message(self) -> None:
+        request = self.request("Inspect https://styles.refero.design/ once, then summarize it.")
+        request["input"].append(
+            {
+                "type": "function_call",
+                "name": "shell",
+                "call_id": "call_url_once",
+                "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"(Invoke-WebRequest -Uri 'https://styles.refero.design/' -TimeoutSec 10).StatusCode\"]}",
+            }
+        )
+        request["input"].append(
+            {
+                "type": "function_call_output",
+                "call_id": "call_url_once",
+                "output": "Open Gate bounded web metadata fetch failed: Unable to connect to the remote server",
+            }
+        )
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing\"]}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, request)
+
+        self.assertEqual(normalized["output"][0]["type"], "message")
+        self.assertIn("answer from available context", normalized["output"][0]["content"][0]["text"])
+        self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
+        self.assertEqual(details["actionable_output_repair"], None)
+
+    def test_uses_shell_for_repeated_external_url_diagnostic_when_update_plan_exists(self) -> None:
+        request = self.request_with_tools(
+            "Inspect https://styles.refero.design/ once, then create index.html.",
+            [*TOOLS, UPDATE_PLAN_TOOL],
+        )
+        request["input"].append(
+            {
+                "type": "function_call",
+                "name": "shell",
+                "call_id": "call_url_once",
+                "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"(Invoke-WebRequest -Uri 'https://styles.refero.design/' -TimeoutSec 10).StatusCode\"]}",
+            }
+        )
+        request["input"].append({"type": "function_call_output", "call_id": "call_url_once", "output": "200"})
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing | Select-Object -ExpandProperty Content\"]}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, request)
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertIn("Open Gate blocked a repeated external URL inspection", normalized["output"][0]["arguments"])
+        self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
+
+    def test_blocks_nonproductive_inspection_after_web_failure_for_index_artifact(self) -> None:
+        request = self.request("Build everything in index.html.")
+        request["input"].append(
+            {
+                "type": "function_call",
+                "name": "shell",
+                "call_id": "call_web",
+                "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Invoke-WebRequest -Uri 'https://styles.refero.design/' -TimeoutSec 10\"]}",
+            }
+        )
+        request["input"].append(
+            {
+                "type": "function_call_output",
+                "call_id": "call_web",
+                "output": "Invoke-WebRequest : Unable to connect to the remote server",
+            }
+        )
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem -Name\"]}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, request)
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertIn("non-productive inspection", normalized["output"][0]["arguments"])
+        self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
+
     def test_repairs_string_command_argument(self) -> None:
         response = {
             "id": "resp_test",
@@ -704,8 +1079,8 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         normalized, details = normalize_responses_response(response, self.request("Run the command."))
 
-        self.assertEqual(normalized["output"][0]["type"], "message")
-        self.assertIn("suppressed an invalid tool call", normalized["output"][0]["content"][0]["text"])
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertIn("Open Gate blocked an invalid shell command (windows_powershell_chain_operator)", normalized["output"][0]["arguments"])
         self.assertEqual(
             {issue["issue"] for issue in details["normalized_command_quality_issues"]},
             set(),
@@ -714,6 +1089,7 @@ class ProxyNormalizationTests(unittest.TestCase):
             {issue["issue"] for issue in details["command_quality_suppressed_structured_calls"][0]["command_quality_errors"]},
             {"windows_powershell_chain_operator"},
         )
+        self.assertIn("quarantined_as", details["command_quality_suppressed_structured_calls"][0])
 
     def test_observe_mode_returns_raw_response_but_records_repair(self) -> None:
         response = {
@@ -800,6 +1176,67 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertIn("The only callable tools", guard_text)
         self.assertIn("web_search", guard_text)
         self.assertIn("There is no web_search/browser tool here", guard_text)
+
+    def test_native_guardrail_explains_web_search_shell_routing(self) -> None:
+        request = {
+            "model": "GLM-4.7-Flash",
+            "tools": [*TOOLS, WEB_SEARCH_TOOL],
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Look at a URL."}]},
+            ],
+        }
+
+        details = transform_upstream_request(request, "auto")
+
+        self.assertEqual(details["input_mode"], "native")
+        guard_text = request["input"][0]["content"][0]["text"]
+        self.assertIn("web_search is hosted by Codex", guard_text)
+        self.assertIn("Open Gate converts URL lookups from web_search into bounded shell metadata fetches", guard_text)
+        self.assertNotIn("There is no web_search/browser tool here", guard_text)
+
+    def test_auto_transform_flattens_developer_role_when_capability_rejects_it(self) -> None:
+        request = {
+            "model": "Qwen3.6-27B",
+            "tools": TOOLS,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "Use structured calls only."}],
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "List files."}]},
+            ],
+        }
+
+        details = transform_upstream_request(
+            request,
+            "auto",
+            upstream_capabilities={"supports_developer_role": False, "supports_system_role": False},
+        )
+
+        self.assertEqual(details["input_mode"], "flattened")
+        self.assertEqual(details["reason"], "capability_rejects_developer_role")
+        self.assertIsInstance(request["input"], str)
+        self.assertIn("developer:", request["input"])
+
+    def test_native_guardrail_uses_user_prefix_when_instruction_roles_are_unsupported(self) -> None:
+        request = {
+            "model": "Qwen3.6-27B",
+            "tools": TOOLS,
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Look at a URL."}]},
+            ],
+        }
+
+        details = transform_upstream_request(
+            request,
+            "auto",
+            upstream_capabilities={"supports_developer_role": False, "supports_system_role": False},
+        )
+
+        self.assertEqual(details["input_mode"], "native")
+        self.assertEqual(details["tool_guardrails_format"], "user_prefix")
+        self.assertIn("Open Gate tool discipline", request["input"][0]["content"][0]["text"])
 
     def test_native_transform_does_not_duplicate_tool_guardrails(self) -> None:
         request = {
@@ -1036,6 +1473,43 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(result.upstream_transform["requested_model"], "stale-codex-profile-model")
         self.assertEqual(result.upstream_transform["upstream_model"], "GLM-4.7-Flash")
         self.assertTrue(result.upstream_transform["model_overridden"])
+
+    def test_forward_retries_flattened_when_upstream_rejects_native_role(self) -> None:
+        request = {
+            "model": "Qwen3.6-27B",
+            "tool_choice": "auto",
+            "tools": TOOLS,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "Use structured calls only."}],
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "List files."}]},
+            ],
+        }
+        response = {"id": "resp_test", "output": []}
+
+        with patch(
+            "open_gate.proxy.post_json",
+            side_effect=[
+                (400, {"error": {"message": "Unexpected message role.", "type": "BadRequestError"}}),
+                (200, response),
+            ],
+        ):
+            result = forward_responses_request(
+                request_body=request,
+                upstream_base_url="http://upstream.invalid/v1",
+                api_key="sk-test",
+                timeout=1.0,
+                normalization_mode="repair",
+            )
+
+        self.assertEqual(result.upstream_status, 200)
+        self.assertEqual(result.upstream_transform["input_mode"], "flattened")
+        self.assertEqual(result.upstream_transform["retry_reason"], "upstream_rejected_native_input")
+        self.assertEqual(result.upstream_transform["first_attempt"]["status"], 400)
+        self.assertIsInstance(result.upstream_request["input"], str)
 
     def test_proxy_error_response_is_completed_to_avoid_codex_retry_storms(self) -> None:
         response = build_proxy_error_response(

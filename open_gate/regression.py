@@ -103,6 +103,47 @@ def fixture_failures(result: JsonObject, expected: JsonObject) -> list[str]:
     actual_text_repairs = len(result["normalization"].get("text_tool_call_repairs") or [])
     if actual_text_repairs < minimum_text_repairs:
         failures.append(f"expected at least {minimum_text_repairs} text tool-call repair(s), got {actual_text_repairs}")
+
+    minimum_command_quality_suppressed = int(expected.get("minimum_command_quality_suppressed_structured_calls") or 0)
+    actual_command_quality_suppressed = len(result["normalization"].get("command_quality_suppressed_structured_calls") or [])
+    if actual_command_quality_suppressed < minimum_command_quality_suppressed:
+        failures.append(
+            "expected at least "
+            f"{minimum_command_quality_suppressed} command-quality suppressed structured call(s), "
+            f"got {actual_command_quality_suppressed}"
+        )
+
+    minimum_structured_quarantines = int(expected.get("minimum_structured_command_quality_quarantines") or 0)
+    command_quality_suppressed = result["normalization"].get("command_quality_suppressed_structured_calls") or []
+    actual_structured_quarantines = sum(
+        1 for item in command_quality_suppressed if isinstance(item, dict) and isinstance(item.get("quarantined_as"), dict)
+    )
+    if actual_structured_quarantines < minimum_structured_quarantines:
+        failures.append(
+            "expected at least "
+            f"{minimum_structured_quarantines} structured command-quality quarantine(s), "
+            f"got {actual_structured_quarantines}"
+        )
+
+    minimum_actionable_repairs = int(expected.get("minimum_actionable_output_repairs") or 0)
+    actual_actionable_repairs = 1 if isinstance(result["normalization"].get("actionable_output_repair"), dict) else 0
+    if actual_actionable_repairs < minimum_actionable_repairs:
+        failures.append(
+            f"expected at least {minimum_actionable_repairs} actionable output repair(s), got {actual_actionable_repairs}"
+        )
+
+    minimum_policy_quarantines = int(expected.get("minimum_policy_quarantines") or 0)
+    policy_suppressed = result["normalization"].get("policy_suppressed_structured_calls") or []
+    actual_policy_quarantines = sum(
+        1 for item in policy_suppressed if isinstance(item, dict) and isinstance(item.get("quarantined_as"), dict)
+    )
+    if actual_policy_quarantines < minimum_policy_quarantines:
+        failures.append(f"expected at least {minimum_policy_quarantines} policy quarantine(s), got {actual_policy_quarantines}")
+
+    text = json.dumps(result["normalized_output"], ensure_ascii=True)
+    for fragment in expected.get("expected_output_fragments") or []:
+        if str(fragment) not in text:
+            failures.append(f"missing expected normalized output fragment: {fragment}")
     return failures
 
 

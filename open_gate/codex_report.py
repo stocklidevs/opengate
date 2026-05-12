@@ -81,6 +81,17 @@ def summarize_capture(path: Path) -> JsonObject:
     upstream_analysis = analyze_response(upstream_response, tools)
     returned_analysis = analyze_response(returned_response, tools)
     normalized_analysis = analyze_response(normalized_response, tools)
+    stripped_text_items = int(normalization.get("stripped_text_items") or 0)
+    text_tool_call_repairs = len(normalization.get("text_tool_call_repairs") or [])
+    promoted_tool_calls = len(normalization.get("promoted_tool_calls") or [])
+    command_quality_suppressed = normalization.get("command_quality_suppressed_structured_calls") or []
+    structured_command_quality_quarantines = sum(
+        1 for item in command_quality_suppressed if isinstance(item, dict) and isinstance(item.get("quarantined_as"), dict)
+    )
+    policy_suppressed = normalization.get("policy_suppressed_structured_calls") or []
+    policy_quarantines = sum(1 for item in policy_suppressed if isinstance(item, dict) and isinstance(item.get("quarantined_as"), dict))
+    actionable_output_repair = normalization.get("actionable_output_repair")
+    unrecoverable_stripped = max(0, stripped_text_items - text_tool_call_repairs - promoted_tool_calls)
 
     return {
         "file": str(path),
@@ -100,14 +111,18 @@ def summarize_capture(path: Path) -> JsonObject:
         "request_stream": bool(request.get("stream")),
         "blocked_by_policy": "blocked by policy" in raw_text.lower(),
         "repairs": len(normalization.get("structured_argument_repairs") or []),
-        "text_tool_call_repairs": len(normalization.get("text_tool_call_repairs") or []),
-        "stripped_text_items": int(normalization.get("stripped_text_items") or 0),
+        "text_tool_call_repairs": text_tool_call_repairs,
+        "stripped_text_items": stripped_text_items,
+        "unrecoverable_stripped_tool_syntax": unrecoverable_stripped,
         "suppressed_structured_calls": len(normalization.get("suppressed_structured_calls") or []),
-        "policy_suppressed_structured_calls": len(normalization.get("policy_suppressed_structured_calls") or []),
+        "policy_suppressed_structured_calls": len(policy_suppressed),
+        "policy_quarantines": policy_quarantines,
         "command_quality_suppressed_structured_calls": len(
-            normalization.get("command_quality_suppressed_structured_calls") or []
+            command_quality_suppressed
         ),
-        "promoted_tool_calls": len(normalization.get("promoted_tool_calls") or []),
+        "structured_command_quality_quarantines": structured_command_quality_quarantines,
+        "actionable_output_repairs": 1 if isinstance(actionable_output_repair, dict) else 0,
+        "promoted_tool_calls": promoted_tool_calls,
         "invalid_tool_calls": len(normalization.get("invalid_tool_calls") or []),
         "upstream": upstream_analysis,
         "returned": returned_analysis,
@@ -209,14 +224,22 @@ def summarize(captures: list[JsonObject], codex_runs: list[JsonObject]) -> JsonO
         "structured_argument_repairs": sum(int(item.get("repairs") or 0) for item in captures),
         "text_tool_call_repairs": sum(int(item.get("text_tool_call_repairs") or 0) for item in captures),
         "stripped_text_items": sum(int(item.get("stripped_text_items") or 0) for item in captures),
+        "unrecoverable_stripped_tool_syntax": sum(
+            int(item.get("unrecoverable_stripped_tool_syntax") or 0) for item in captures
+        ),
         "promoted_tool_calls": sum(int(item.get("promoted_tool_calls") or 0) for item in captures),
         "suppressed_structured_calls": sum(int(item.get("suppressed_structured_calls") or 0) for item in captures),
         "policy_suppressed_structured_calls": sum(
             int(item.get("policy_suppressed_structured_calls") or 0) for item in captures
         ),
+        "policy_quarantines": sum(int(item.get("policy_quarantines") or 0) for item in captures),
         "command_quality_suppressed_structured_calls": sum(
             int(item.get("command_quality_suppressed_structured_calls") or 0) for item in captures
         ),
+        "structured_command_quality_quarantines": sum(
+            int(item.get("structured_command_quality_quarantines") or 0) for item in captures
+        ),
+        "actionable_output_repairs": sum(int(item.get("actionable_output_repairs") or 0) for item in captures),
         "blocked_by_policy_captures": sum(1 for item in captures if item.get("blocked_by_policy")),
         "upstream_text_leaks": sum(1 for item in captures if item["upstream"].get("text_leaked")),
         "returned_text_leaks": sum(1 for item in captures if item["returned"].get("text_leaked")),

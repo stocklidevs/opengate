@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from .capabilities import disabled_capabilities, probe_upstream_capabilities
 from .config import discover_config_path, load_config_file, merge_config
 from .proxy import build_proxy_error_response, forward_responses_request
 from .streaming import response_created_event, response_in_progress_event, response_stream_events, started_response
@@ -58,6 +59,8 @@ class Handler(BaseHTTPRequestHandler):
                     "config_path": self.server.config.get("config_path"),
                     "model_source": self.server.config.get("model_source"),
                     "upstream_base_url": self.server.config.get("upstream_base_url"),
+                    "capability_probe": self.server.config.get("capability_probe"),
+                    "upstream_capabilities": self.server.config.get("upstream_capabilities"),
                 }
             )
             return
@@ -177,6 +180,7 @@ class Handler(BaseHTTPRequestHandler):
             instruction_policy=self.server.config["instruction_policy"],
             tool_schema_policy=self.server.config["tool_schema_policy"],
             upstream_model=self.server.config.get("model") if self.server.config.get("upstream_base_url") else None,
+            upstream_capabilities=self.server.config.get("upstream_capabilities"),
         )
 
     def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
@@ -468,6 +472,9 @@ SETTING_DESCRIPTIONS = {
     "upstream_base_url": "OpenAI-compatible upstream base URL, usually your vLLM /v1 endpoint.",
     "upstream_api_key": "Bearer token sent upstream; vLLM usually ignores the placeholder default.",
     "upstream_timeout": "Seconds OpenGate waits for one buffered upstream model response.",
+    "capability_probe": "Controls startup upstream protocol probes: auto or off.",
+    "capability_probe_timeout": "Seconds allowed for each startup protocol probe.",
+    "upstream_capabilities": "Cached upstream protocol support discovered by startup probes.",
     "normalization_mode": "repair returns cleaned responses; observe records fixes but returns raw upstream output.",
     "upstream_input_mode": "auto flattens Codex Responses history only when vLLM needs it.",
     "context_policy": "spoon compacts long Codex history while preserving recent turns and durable constraints.",
@@ -522,13 +529,63 @@ def resolve_model(config: JsonObject) -> None:
         config["model_source"] = "cli/config"
 
 
+def resolve_capabilities(config: JsonObject) -> None:
+    if not config.get("upstream_base_url"):
+        config["upstream_capabilities"] = disabled_capabilities()
+        return
+    mode = str(config.get("capability_probe") or "auto").lower()
+    if mode == "off":
+        config["upstream_capabilities"] = disabled_capabilities()
+        return
+    try:
+        config["upstream_capabilities"] = probe_upstream_capabilities(
+            str(config["upstream_base_url"]),
+            str(config["upstream_api_key"]),
+            str(config["model"]),
+            float(config.get("capability_probe_timeout") or 8.0),
+        )
+    except Exception as exc:  # pragma: no cover - defensive startup should still be possible.
+        capabilities = disabled_capabilities()
+        capabilities["probed"] = True
+        capabilities["probe_mode"] = "auto"
+        capabilities["probe_errors"] = [{"probe": "startup", "message": str(exc)}]
+        config["upstream_capabilities"] = capabilities
+
+
 def masked_value(key: str, value: Any) -> str:
     if key == "upstream_api_key" and value:
         text = str(value)
         return text[:4] + "..." if len(text) > 4 else "<set>"
+    if key == "upstream_capabilities":
+        return capability_summary(value)
     if value is None:
         return "<none>"
     return str(value)
+
+
+def capability_summary(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "<unknown>"
+    if not value.get("probed"):
+        return "not probed"
+    parts = [
+        f"user={tri_state(value.get('supports_responses_user_input'))}",
+        f"developer={tri_state(value.get('supports_developer_role'))}",
+        f"system={tri_state(value.get('supports_system_role'))}",
+        f"tool_history={tri_state(value.get('supports_native_tool_history'))}",
+    ]
+    errors = value.get("probe_errors")
+    if isinstance(errors, list) and errors:
+        parts.append(f"errors={len(errors)}")
+    return ", ".join(parts)
+
+
+def tri_state(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "unknown"
 
 
 def print_startup_banner(config: JsonObject) -> None:
@@ -551,6 +608,9 @@ def print_startup_banner(config: JsonObject) -> None:
         "upstream_base_url",
         "upstream_api_key",
         "upstream_timeout",
+        "capability_probe",
+        "capability_probe_timeout",
+        "upstream_capabilities",
         "normalization_mode",
         "upstream_input_mode",
         "context_policy",
@@ -583,6 +643,8 @@ def main() -> int:
     parser.add_argument("--upstream-base-url", "--upstream", dest="upstream_base_url", help="Forward /v1/responses to this OpenAI-compatible upstream base URL.")
     parser.add_argument("--upstream-api-key")
     parser.add_argument("--upstream-timeout", type=float)
+    parser.add_argument("--capability-probe", choices=["auto", "off"])
+    parser.add_argument("--capability-probe-timeout", type=float)
     parser.add_argument("--stream-heartbeat-seconds", type=float, help="Seconds between Responses heartbeat events while waiting for a buffered upstream response.")
     parser.add_argument(
         "--normalization-mode",
@@ -638,8 +700,13 @@ def main() -> int:
         parser.error("--context-max-chars must be at least 4000")
     if int(config["context_recent_items"]) < 1:
         parser.error("--context-recent-items must be at least 1")
+    if str(config["capability_probe"]).lower() not in {"auto", "off"}:
+        parser.error("--capability-probe must be auto or off")
+    if float(config["capability_probe_timeout"]) <= 0:
+        parser.error("--capability-probe-timeout must be greater than 0")
     try:
         resolve_model(config)
+        resolve_capabilities(config)
     except RuntimeError as exc:
         parser.error(str(exc))
 

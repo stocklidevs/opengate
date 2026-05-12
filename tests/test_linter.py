@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from open_gate.linter import analyze_text
+from open_gate.linter import analyze_text, load_tool_specs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +105,19 @@ class LinterTests(unittest.TestCase):
         self.assertEqual(report.tool_calls[0].arguments["workdir"], "C:\\Users\\example\\source\\repos\\glm-test")
         self.assertTrue(report.tool_calls[0].valid)
         self.assertEqual(report.cleaned_text, "")
+
+    def test_type_only_hosted_tool_is_available(self) -> None:
+        tools = [{"type": "web_search"}]
+
+        specs = load_tool_specs(tools)
+        report = analyze_text(
+            "<tool_call>web_search<arg_key>external_web_access</arg_key><arg_value>true</arg_value></tool_call>",
+            tools,
+        )
+
+        self.assertIn("web_search", specs)
+        self.assertEqual(report.tool_calls[0].name, "web_search")
+        self.assertTrue(report.tool_calls[0].valid)
 
     def test_line_broken_glm_closing_tag_is_extracted(self) -> None:
         tools = [

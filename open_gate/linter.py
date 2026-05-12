@@ -117,6 +117,9 @@ def load_tool_specs(raw_tools: list[JsonObject] | JsonObject | None) -> dict[str
         elif "name" in tool:
             name = tool.get("name")
             parameters = tool.get("parameters") or {}
+        elif isinstance(tool.get("type"), str):
+            name = tool.get("type")
+            parameters = tool.get("parameters") or {}
 
         if isinstance(name, str) and name:
             specs[name] = ToolSpec(name=name, parameters=parameters)

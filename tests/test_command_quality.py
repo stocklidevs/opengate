@@ -315,6 +315,25 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertIn("unbounded_web_fetch", {issue["issue"] for issue in issues})
 
+    def test_detects_powershell_curl_unix_flags(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    'curl -s -S -m 10 --head "https://styles.refero.design/"',
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("powershell_curl_unix_flags", {issue["issue"] for issue in issues})
+
     def test_detects_malformed_json_array_command(self) -> None:
         call = ToolCall(
             name="shell",

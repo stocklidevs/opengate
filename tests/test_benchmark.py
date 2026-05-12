@@ -186,6 +186,20 @@ class BenchmarkScoringTests(unittest.TestCase):
         self.assertFalse(score["strict_success"])
         self.assertTrue(score["reasoning_leaked"])
 
+    def test_unexpected_role_http_error_is_protocol_incompatibility(self) -> None:
+        score = score_response(
+            {},
+            TOOLS,
+            {"expected_tool": "shell"},
+            "responses",
+            error='HTTP 400: {"error":{"message":"Unexpected message role.","type":"BadRequestError"}}',
+        )
+
+        self.assertFalse(score["strict_success"])
+        self.assertTrue(score["protocol_incompatibility"])
+        self.assertEqual(score["protocol_incompatibility_type"], "unexpected_message_role")
+        self.assertFalse(score["transport_error"])
+
 
 if __name__ == "__main__":
     unittest.main()

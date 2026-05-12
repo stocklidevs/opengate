@@ -16,6 +16,9 @@ param(
     [string]$InstructionPolicy = "auto",
     [ValidateSet("full", "auto", "compact")]
     [string]$ToolSchemaPolicy = "auto",
+    [ValidateSet("auto", "off")]
+    [string]$CapabilityProbe = "auto",
+    [double]$CapabilityProbeTimeout = 8,
     [string]$CaptureDir = ""
 )
 
@@ -37,7 +40,7 @@ if ($existingListener) {
 }
 
 $serverJob = Start-Job -Name "open-gate-proxy" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapturePath)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds, $CapturePath)
     Set-Location -LiteralPath $RootPath
     python -m open_gate.server `
         --host 127.0.0.1 `
@@ -51,12 +54,14 @@ $serverJob = Start-Job -Name "open-gate-proxy" -ScriptBlock {
         --context-recent-items $CtxRecentItems `
         --instruction-policy $InstrPolicy `
         --tool-schema-policy $SchemaPolicy `
+        --capability-probe $CapabilityProbeMode `
+        --capability-probe-timeout $CapabilityProbeSeconds `
         --quiet
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CaptureDir
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout, $CaptureDir
 
 try {
     $health = $null
-    $deadline = (Get-Date).AddSeconds(20)
+    $deadline = (Get-Date).AddSeconds(90)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 250
         if ($serverJob.State -ne "Running") {
@@ -71,7 +76,7 @@ try {
         }
     }
     if (-not $health) {
-        throw "OpenGate proxy did not become healthy on port $Port within 20 seconds."
+        throw "OpenGate proxy did not become healthy on port $Port within 90 seconds."
     }
     if ($health.service -ne "open-gate") {
         throw "Unexpected service on port ${Port}: $($health.service)"
@@ -90,6 +95,9 @@ try {
     }
     if ($health.tool_schema_policy -ne $ToolSchemaPolicy) {
         throw "OpenGate health reported tool schema policy '$($health.tool_schema_policy)' but benchmark requested '$ToolSchemaPolicy'."
+    }
+    if ($health.capability_probe -ne $CapabilityProbe) {
+        throw "OpenGate health reported capability probe '$($health.capability_probe)' but benchmark requested '$CapabilityProbe'."
     }
 
     Set-Location -LiteralPath $Root.Path

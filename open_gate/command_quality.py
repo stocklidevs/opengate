@@ -360,6 +360,18 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
             }
         )
 
+    if contains_powershell_curl_unix_flags(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "powershell_curl_unix_flags",
+                "severity": "error",
+                "source": source,
+                "command": command,
+                "message": "PowerShell aliases curl to Invoke-WebRequest; Unix curl flags such as -s, -m, or --head are unreliable here.",
+            }
+        )
+
     workdir = arguments.get("workdir")
     for target in relative_cd_targets(script):
         if isinstance(workdir, str) and path_last_segment(workdir).lower() == path_last_segment(target).lower():
@@ -959,6 +971,16 @@ def contains_unbounded_web_fetch(script: str) -> bool:
         if not re.search(r"\b(?:head|range|first|totalcount|select-object\s+-first|select-string)\b", script, re.IGNORECASE):
             return True
     return False
+
+
+def contains_powershell_curl_unix_flags(script: str) -> bool:
+    scrubbed = strip_powershell_here_strings(script)
+    return bool(
+        re.search(
+            r"(?is)(?:^|[;&|]\s*)curl\s+(?=.*(?:\s-(?:s|S|I|L|m)\b|--head\b|--max-time\b|--silent\b|--show-error\b))",
+            scrubbed,
+        )
+    )
 
 
 def relative_cd_targets(script: str) -> list[str]:

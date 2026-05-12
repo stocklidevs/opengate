@@ -4,6 +4,7 @@ Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
 
 - Qwen3-Coder-Next checked on 2026-05-09.
 - GLM-4.7-Flash checked on 2026-05-10.
+- Qwen3.6-27B basic smoke checked on 2026-05-11 UTC, 2026-05-10 America/New_York.
 
 ## Suites
 
@@ -75,11 +76,27 @@ These are direct vLLM results before Open Gate repairs. Run counts differ becaus
 | Suite | Model | Runs | Strict Success | Text Leaks | Reasoning Leaks | Missed Tool Calls | Invalid Tool Calls | HTTP Errors |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `codex_shell_smoke` | Qwen3-Coder-Next | 1 | 3/3, 100% | 0/3, 0% | 0/3, 0% | 0/3, 0% | 0/3, 0% | 0/3, 0% |
+| `codex_shell_smoke` | Qwen3.6-27B | 3 | 9/9, 100% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% |
 | `codex_shell_smoke` | GLM-4.7-Flash | 3 | 0/9, 0% | 6/9, 66.67% | 0/9, 0% | 9/9, 100% | 0/9, 0% | 0/9, 0% |
 | `codex_tool_leak_stress` | Qwen3-Coder-Next | 1 | 3/4, 75% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% |
 | `codex_tool_leak_stress` | GLM-4.7-Flash | 3 | 0/12, 0% | 12/12, 100% | 1/12, 8.33% | 12/12, 100% | 0/12, 0% | 0/12, 0% |
 | `qwen_serious_tool_stress` | Qwen3-Coder-Next | 3 | 43/60, 71.67% | 10/60, 16.67% | 0/60, 0% | not recorded | 4/60, 6.67% | 0/60, 0% |
+| `qwen_serious_tool_stress` | Qwen3.6-27B | 1 | 0/20, 0% | 0/20, 0% | 0/20, 0% | 15/20, 75% | 0/20, 0% | 20/20, 100% |
 | `qwen_serious_tool_stress` | GLM-4.7-Flash | 1 | 2/20, 10% | 17/20, 85% | 5/20, 25% | 15/20, 75% | 1/20, 5% | 0/20, 0% |
+
+## Prepared Qwen3.6-27B Benchmark
+
+The next target is `Qwen3.6-27B` served from `Qwen/Qwen3.6-27B` with vLLM `--max-model-len 65536`, `--reasoning-parser qwen3`, `--enable-auto-tool-choice`, and `--tool-call-parser qwen3_coder`. The benchmark should be read in this order:
+
+1. Direct `codex_shell_smoke`, three runs: complete, `9/9` strict successes.
+2. Direct `qwen_serious_tool_stress`, one run: complete, `0/20` due to protocol incompatibility, not model leakage.
+3. OpenGate `repair/full` on `qwen_serious_tool_stress`, three runs.
+4. OpenGate `repair/spoon` on `qwen_serious_tool_stress`, one partial run: `17/20` captures completed before the external command timeout, `14/17` derived strict successes, zero returned leaks, invalid calls, or command-quality issues.
+5. Live Codex software-build suite in a disposable writable folder.
+
+Prepared commands and result placeholders are in `docs\qwen3-6-27b.md`.
+
+OpenGate `0.6.9` changes benchmark interpretation for this case: `HTTP 400: Unexpected message role` is classified as a protocol incompatibility, and direct raw results should not be presented as ordinary tool-call failures. The proxy path addresses this by probing upstream role support and flattening unsupported native Responses input.
 
 ## GLM-4.7-Flash Direct Baseline
 

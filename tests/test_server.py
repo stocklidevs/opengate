@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from open_gate.proxy import ProxyResult
-from open_gate.server import CaptureServer, Handler, print_startup_banner, resolve_model
+from open_gate.server import CaptureServer, Handler, print_startup_banner, resolve_capabilities, resolve_model
 from open_gate.version import __version__
 
 
@@ -74,6 +74,25 @@ class ServerStreamingTests(unittest.TestCase):
 
         self.assertEqual(config["model"], "GLM-4.7-Flash")
         self.assertEqual(config["model_source"], "upstream /models")
+
+    def test_resolve_capabilities_records_probe_result(self) -> None:
+        config = {
+            "model": "Qwen3.6-27B",
+            "upstream_base_url": "http://upstream.invalid/v1",
+            "upstream_api_key": "sk-test",
+            "upstream_timeout": 120.0,
+            "capability_probe": "auto",
+            "capability_probe_timeout": 1.0,
+        }
+
+        with patch(
+            "open_gate.server.probe_upstream_capabilities",
+            return_value={"probed": True, "supports_developer_role": False, "probe_errors": []},
+        ):
+            resolve_capabilities(config)
+
+        self.assertTrue(config["upstream_capabilities"]["probed"])
+        self.assertFalse(config["upstream_capabilities"]["supports_developer_role"])
 
     def test_startup_banner_shows_active_values(self) -> None:
         config = {

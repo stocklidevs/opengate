@@ -69,6 +69,11 @@ Create a model note under `docs\` with:
 - Required Open Gate modes or transforms.
 - Known non-blocking warnings.
 
+Current model notes:
+
+- `docs\qwen3-coder-next.md` records the first known-good Qwen3-Coder-Next setup.
+- `docs\qwen3-6-27b.md` prepares Qwen3.6-27B setup, benchmark commands, and result placeholders.
+
 ## 9. Version And Evidence
 
 - Bump the version for behavior changes.

@@ -67,6 +67,7 @@ def main() -> int:
     suite = json.loads(args.suite.read_text(encoding="utf-8"))
     api = args.api or suite.get("api") or "responses"
     endpoint = Endpoint(args.base_url, args.api_key, args.timeout)
+    created_at = datetime.now(timezone.utc).isoformat()
 
     results: list[JsonObject] = []
     for run_index in range(args.runs):
@@ -77,28 +78,53 @@ def main() -> int:
             result = run_case(endpoint, suite, case, api, args, run_index)
             result["latency_seconds"] = round(time.perf_counter() - started, 3)
             results.append(result)
+            if args.output:
+                write_report(args.output, build_report(args, suite, api, results, created_at, completed=False))
 
-    report = {
-        "label": args.label,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "base_url": args.base_url,
-        "model": args.model,
-        "api": api,
-        "suite": suite.get("name") or str(args.suite),
-        "runs": args.runs,
-        "summary": summarise(results),
-        "results": results,
-    }
+    report = build_report(args, suite, api, results, created_at, completed=True)
 
     raw = json.dumps(report, indent=2, ensure_ascii=True)
     if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(raw + "\n", encoding="utf-8")
+        write_report(args.output, report)
     if args.summary_only:
         print(json.dumps({key: report[key] for key in ("label", "created_at", "suite", "runs", "summary")}, indent=2, ensure_ascii=True))
     else:
         print(raw)
     return 0
+
+
+def build_report(
+    args: argparse.Namespace,
+    suite: JsonObject,
+    api: str,
+    results: list[JsonObject],
+    created_at: str,
+    completed: bool,
+) -> JsonObject:
+    cases_per_run = sum(1 for case in suite.get("cases", []) if isinstance(case, dict))
+    expected_total = int(args.runs) * cases_per_run
+    return {
+        "label": args.label,
+        "created_at": created_at,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "base_url": args.base_url,
+        "model": args.model,
+        "api": api,
+        "suite": suite.get("name") or str(args.suite),
+        "runs": args.runs,
+        "completed": completed,
+        "cases_completed": len(results),
+        "cases_expected": expected_total,
+        "summary": summarise(results),
+        "results": results,
+    }
+
+
+def write_report(path: Path, report: JsonObject) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 def run_case(endpoint: Endpoint, suite: JsonObject, case: JsonObject, api: str, args: argparse.Namespace, run_index: int) -> JsonObject:
@@ -191,6 +217,9 @@ def score_response(response: JsonObject, tools: list[JsonObject], case: JsonObje
     invalid_calls = [call.to_json() for call in all_calls if not call.valid]
     argument_leaks = argument_leak_reports(all_calls)
     command_quality_issues = inspect_tool_calls(structured)
+    protocol_type = protocol_incompatibility_type(error)
+    protocol_incompatibility = bool(protocol_type)
+    transport_error = bool(error and not protocol_incompatibility)
     missed = bool(expected and missing_expected)
     text_leaked = bool(text_leak_report.tool_calls or text_leak_report.leaks)
     reasoning_leaked = bool(reasoning_leak_report.tool_calls or reasoning_leak_report.leaks)
@@ -213,6 +242,9 @@ def score_response(response: JsonObject, tools: list[JsonObject], case: JsonObje
         "strict_success": strict_success,
         "failure": failure,
         "proxy_recoverable": proxy_recoverable,
+        "protocol_incompatibility": protocol_incompatibility,
+        "protocol_incompatibility_type": protocol_type,
+        "transport_error": transport_error,
         "leaked": leaked,
         "text_leaked": text_leaked,
         "reasoning_leaked": reasoning_leaked,
@@ -240,6 +272,21 @@ def score_response(response: JsonObject, tools: list[JsonObject], case: JsonObje
         "text_preview": text[:1000],
         "reasoning_preview": reasoning_text[:1000],
     }
+
+
+def protocol_incompatibility_type(error: str | None) -> str | None:
+    if not error:
+        return None
+    lowered = error.lower()
+    if "unexpected message role" in lowered:
+        return "unexpected_message_role"
+    if "unsupported message role" in lowered or "unsupported role" in lowered or "invalid role" in lowered:
+        return "unsupported_message_role"
+    if "function_call_output" in lowered or "function_call" in lowered:
+        return "unsupported_responses_tool_history"
+    if "input should be" in lowered or "invalid input" in lowered:
+        return "unsupported_responses_input_shape"
+    return None
 
 
 def expected_tools(case: JsonObject) -> list[str]:
@@ -473,6 +520,8 @@ def summarise(results: list[JsonObject]) -> JsonObject:
         "argument_leaks": sum(1 for item in results if item.get("argument_leak")),
         "command_quality_issues": sum(1 for item in results if item.get("command_quality_issue")),
         "http_errors": sum(1 for item in results if item.get("http_error")),
+        "protocol_incompatibilities": sum(1 for item in results if item.get("protocol_incompatibility")),
+        "transport_errors": sum(1 for item in results if item.get("transport_error")),
     }
     rates = {f"{key}_rate": round(value / total, 4) for key, value in counters.items()}
     return {"total": total, **counters, **rates}

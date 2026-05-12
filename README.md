@@ -8,7 +8,7 @@
   <strong>Make local open coding models behave inside Codex CLI.</strong>
 </p>
 
-![Version](https://img.shields.io/badge/version-0.6.7-blue)
+![Version](https://img.shields.io/badge/version-0.6.11-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![API](https://img.shields.io/badge/API-Responses-111827)
 ![Proxy Modes](https://img.shields.io/badge/proxy-repair%20%7C%20observe-16A34A)
@@ -17,7 +17,7 @@
 
 Open Gate is a local harness and proxy for making open coding models behave like a Responses API agent backend for Codex. It captures real Codex traffic, detects tool-call leakage, repairs common open-model tool-call failures, and produces repeatable baseline reports that other home-lab users can compare.
 
-Current release: `0.6.7`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
+Current release: `0.6.11`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
 
 ## Current Shape
 
@@ -25,11 +25,14 @@ Current release: `0.6.7`. See `CHANGELOG.md` for release notes and `docs\release
 - `open_gate.server` runs a fake `/v1/responses` and `/v1/chat/completions` server.
 - `open_gate.server --upstream-base-url ...` or `python -m open_gate --upstream ...` runs buffered-upstream `/v1/responses` proxy mode.
 - Proxy mode autodetects the active upstream model from `GET /v1/models` when `model = "auto"`, and rewrites Codex's forwarded `model` field to that detected upstream model.
+- Proxy mode probes upstream protocol capabilities, including `developer` role and native tool-history support, then adapts Responses input before vLLM rejects it.
 - Startup prints the OpenGate version, listener URL, active flags, descriptions, and current values.
 - Proxy mode supports `--normalization-mode repair` and `--normalization-mode observe`.
-- Proxy mode defaults to `--upstream-input-mode auto`, which flattens multi-turn Codex Responses history when vLLM rejects native item types.
+- Proxy mode defaults to `--upstream-input-mode auto`, which flattens multi-turn Codex Responses history or unsupported instruction roles when vLLM cannot accept the native shape.
 - Proxy mode supports `--context-policy spoon`, which compacts older Codex history, keeps recent turns exact, and carries forward concise constraints from prior tool failures.
-- Proxy mode injects compact tool-discipline guardrails before upstream generation, including the exact callable tool list and explicit warnings against invented aliases such as `web_search`, `write_file`, and `apply_patch`.
+- Proxy mode injects compact tool-discipline guardrails before upstream generation, including the exact callable tool list and explicit warnings against invented or unavailable aliases such as `browser`, `write_file`, and `apply_patch`.
+- Proxy mode quarantines structured shell calls with command-quality errors into safe diagnostic shell calls, so Codex receives actionable tool feedback instead of only assistant prose.
+- Proxy mode treats Codex `web_search` as a hosted tool, not a local Codex function, and converts model-returned `web_search` URL lookups into bounded shell metadata fetches.
 - Proxy mode defaults to request-diet `auto` policies, digesting oversized Codex instructions and compacting oversized tool schemas before forwarding to vLLM.
 - Streamed proxy requests emit real Responses lifecycle/heartbeat events while waiting for vLLM, then replay the normalized response as Responses SSE events.
 - Every request is written to `captures/` with sensitive headers redacted.
@@ -38,6 +41,7 @@ Current release: `0.6.7`. See `CHANGELOG.md` for release notes and `docs\release
 - `open_gate.regression` replays captured upstream responses through normalization as stable fixtures.
 - `open_gate.adversarial` fuzzes malformed GLM-style tag whitespace through the full proxy normalizer to catch leakage slips before live Codex runs.
 - `open_gate.codex_report` summarizes live Codex JSONL output and proxy captures.
+- `open_gate.benchmark` writes partial reports as each case finishes and separates protocol incompatibilities from model/tool-call behavior.
 - Fixtures in `fixtures/leaks/` model common bad outputs from open-model tool-call formats.
 
 ## Quick Start
@@ -57,9 +61,11 @@ host = "127.0.0.1"
 port = 8001
 path = "/v1"
 model = "auto"
+capability_probe = "auto"
+capability_probe_timeout = 8
 ```
 
-When `model = "auto"`, OpenGate asks the upstream server for `GET /v1/models` at launch. Codex can keep pointing at OpenGate; OpenGate maps whatever Codex requested to the detected model currently served by vLLM.
+When `model = "auto"`, OpenGate asks the upstream server for `GET /v1/models` at launch. With `capability_probe = "auto"`, it also sends small protocol probes so it can learn whether the upstream server accepts `developer` messages and native tool-call history. Codex can keep pointing at OpenGate; OpenGate maps whatever Codex requested to the detected model currently served by vLLM.
 
 The older commands still work:
 
@@ -91,7 +97,7 @@ python -m open_gate `
   --tool-schema-policy auto
 ```
 
-See `docs\context-policy.md` for the spoon-feed compiler and its capture metrics.
+See `docs\context-policy.md` for the spoon-feed compiler and its capture metrics. See `docs\upstream-capabilities.md` for capability probing and protocol adaptation.
 
 Use `--upstream-timeout` to give slower local models enough time for large code-generation turns. The CLI default is `420` seconds. Use `--stream-heartbeat-seconds` to tune Responses heartbeat events for streamed Codex requests. The default is `2.0`, which keeps Codex from seeing a silent socket while Qwen/GLM/vLLM spends a minute or more producing a large tool call.
 
@@ -156,7 +162,7 @@ The lint output includes `command_quality_issues` for tool calls that are syntac
 
 ## Benchmark Tool Calls
 
-The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. The first GLM baseline used `zai-org/GLM-4.7-Flash` as `GLM-4.7-Flash`. Full setup notes are in `docs\vllm-notes.md`.
+The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. The first GLM baseline used `zai-org/GLM-4.7-Flash` as `GLM-4.7-Flash`. Qwen3.6-27B setup and pending benchmark commands are prepared in `docs\qwen3-6-27b.md`. Full setup notes are in `docs\vllm-notes.md`.
 
 Run a raw baseline against the GX10 vLLM server:
 
@@ -238,7 +244,7 @@ Summarise an existing live run:
 python -m open_gate.codex_report runs\codex-live\<run-id>\captures --codex-dir runs\codex-live\<run-id> --pretty --summary-only
 ```
 
-Live benchmark details are in `docs\live-codex-benchmark.md`. The first known-good Qwen compatibility note is in `docs\qwen3-coder-next.md`, and the repeatable process for the next model is in `docs\model-adaptation-checklist.md`.
+Live benchmark details are in `docs\live-codex-benchmark.md`. The first known-good Qwen compatibility note is in `docs\qwen3-coder-next.md`, Qwen3.6-27B preparation notes are in `docs\qwen3-6-27b.md`, and the repeatable process for the next model is in `docs\model-adaptation-checklist.md`.
 
 Latest local smoke result:
 
@@ -284,8 +290,8 @@ The first Codex capture showed `POST /v1/responses` with `stream: true`, three i
 
 ## Versioning
 
-Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.6.7`.
+Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.6.11`.
 
 ## Next Milestone
 
-The next step is to adapt a third model with the same process: direct baseline, observe capture, repair benchmark, then add only model-agnostic recovery rules when the captures prove a repeatable failure shape.
+The next step is to validate Qwen3.6-27B with the same process: direct baseline, OpenGate repair benchmark, live Codex software-build run, then add only model-agnostic recovery rules when captures prove a repeatable failure shape.

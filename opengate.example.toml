@@ -13,6 +13,8 @@ path = "/v1"
 api_key = "sk-no-key-required"
 timeout = 420
 model = "auto"
+capability_probe = "auto"
+capability_probe_timeout = 8
 
 [proxy]
 normalization_mode = "repair"

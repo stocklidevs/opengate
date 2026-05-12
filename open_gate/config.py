@@ -18,6 +18,8 @@ DEFAULT_CONFIG: JsonObject = {
     "upstream_base_url": None,
     "upstream_api_key": "sk-no-key-required",
     "upstream_timeout": 420.0,
+    "capability_probe": "auto",
+    "capability_probe_timeout": 8.0,
     "normalization_mode": "repair",
     "upstream_input_mode": "auto",
     "context_policy": "spoon",
@@ -69,7 +71,7 @@ def flatten_config(raw: JsonObject) -> JsonObject:
     copy_keys(server, flattened, "host", "port", "capture_dir", "text", "fixture", "quiet", "no_banner")
 
     upstream = table(raw, "upstream")
-    copy_keys(upstream, flattened, "api_key", "timeout", "base_url", "model")
+    copy_keys(upstream, flattened, "api_key", "timeout", "base_url", "model", "capability_probe", "capability_probe_timeout")
     if "api_key" in flattened:
         flattened["upstream_api_key"] = flattened.pop("api_key")
     if "timeout" in flattened:

@@ -14,6 +14,9 @@ param(
     [string]$InstructionPolicy = "auto",
     [ValidateSet("full", "auto", "compact")]
     [string]$ToolSchemaPolicy = "auto",
+    [ValidateSet("auto", "off")]
+    [string]$CapabilityProbe = "auto",
+    [double]$CapabilityProbeTimeout = 8,
     [ValidateSet("read-only", "workspace-write", "danger-full-access")]
     [string]$Sandbox = "read-only",
     [switch]$FailOnPromptSandboxMismatch,
@@ -77,6 +80,8 @@ if ($DryRun) {
         context_recent_items = $ContextRecentItems
         instruction_policy = $InstructionPolicy
         tool_schema_policy = $ToolSchemaPolicy
+        capability_probe = $CapabilityProbe
+        capability_probe_timeout = $CapabilityProbeTimeout
         sandbox = $Sandbox
         fail_on_prompt_sandbox_mismatch = [bool]$FailOnPromptSandboxMismatch
         case_timeout_seconds = $CaseTimeoutSeconds
@@ -106,6 +111,8 @@ $manifest = [ordered]@{
     context_recent_items = $ContextRecentItems
     instruction_policy = $InstructionPolicy
     tool_schema_policy = $ToolSchemaPolicy
+    capability_probe = $CapabilityProbe
+    capability_probe_timeout = $CapabilityProbeTimeout
     sandbox = $Sandbox
     fail_on_prompt_sandbox_mismatch = [bool]$FailOnPromptSandboxMismatch
     case_timeout_seconds = $CaseTimeoutSeconds
@@ -119,7 +126,7 @@ $manifest = [ordered]@{
 }
 
 $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds)
     Set-Location -LiteralPath $RootPath
     python -m open_gate `
         --host 127.0.0.1 `
@@ -133,12 +140,30 @@ $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
         --context-recent-items $CtxRecentItems `
         --instruction-policy $InstrPolicy `
         --tool-schema-policy $SchemaPolicy `
+        --capability-probe $CapabilityProbeMode `
+        --capability-probe-timeout $CapabilityProbeSeconds `
         --quiet
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout
 
 try {
-    Start-Sleep -Milliseconds 900
-    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health"
+    $health = $null
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        if ($serverJob.State -ne "Running") {
+            $jobOutput = Receive-Job -Job $serverJob -Keep -ErrorAction SilentlyContinue | Out-String
+            throw "OpenGate proxy exited before it became healthy. Job state: $($serverJob.State). Output: $jobOutput"
+        }
+        try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health"
+            break
+        }
+        catch {
+        }
+    }
+    if (-not $health) {
+        throw "OpenGate proxy did not become healthy on port $Port within 90 seconds."
+    }
     $manifest["health"] = $health
 
     for ($runIndex = 0; $runIndex -lt $Runs; $runIndex++) {

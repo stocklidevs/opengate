@@ -35,6 +35,8 @@ The linter currently reports:
 - `malformed_json_array_command`: malformed JSON-array text passed as a PowerShell `-Command` script. If the nested array is otherwise recoverable, Open Gate can unwrap it, including GLM-style uppercase `\N` newline escapes inside the encoded command.
 - GLM sometimes places a full multi-line HTML document inside a quoted JSON-like `shell.command` array. Open Gate parses that relaxed array shape before falling back to string-command repair.
 - GLM can also emit the full `index.html` body as a bare here-string followed by file parameters. Open Gate repairs that into a PowerShell `Set-Content` command so Codex receives a runnable tool call.
+- OpenGate `0.6.10` also quarantines structured shell calls with error-level command-quality issues. Instead of silently dropping a bad structured call when assistant prose is present, OpenGate replaces the call with a safe diagnostic shell call such as `Write-Output 'Open Gate blocked...'`. That gives Codex a tool-output loop it can recover from.
+- OpenGate `0.6.11` treats Codex `web_search` as a hosted upstream tool rather than a local client function. If a local model returns `web_search` as a normal tool call, OpenGate converts URL lookups into a bounded PowerShell metadata fetch through `shell`, including `site:domain` queries.
 - `python_compound_statement_one_liner`: `python -c` with compound statements such as `async def` packed after semicolons.
 - `uv_run_playwright_entrypoint`: `uv run playwright ...` before the Playwright console script is known to exist.
 - `unbounded_web_fetch`: full-page web fetches that print whole HTML content into the model context.
@@ -53,7 +55,7 @@ Proxy captures include command-quality telemetry in `normalization`:
 - `text_tool_call_repairs`: leaked text tool calls whose arguments were repaired before promotion.
 - `command_quality_suppressed_structured_calls`: structured calls removed because error-level command-quality issues remained after repair.
 
-Repair mode may fix safe command-shape problems such as nested PowerShell, split PowerShell command arrays, bare PowerShell cmdlets, or JSON-array encoded PowerShell. Empty artifact writes and leaked shell calls with unrepaired command-quality errors are quarantined into harmless diagnostic shell calls so Codex receives tool feedback and can continue the normal loop without running the bad command. Structured calls with remaining error-level issues are suppressed before Codex can execute them; Open Gate returns a short diagnostic message instead of the bad tool call. It does not rewrite risky shell semantics such as replacing `&&` with `;`.
+Repair mode may fix safe command-shape problems such as nested PowerShell, split PowerShell command arrays, bare PowerShell cmdlets, or JSON-array encoded PowerShell. Empty artifact writes and leaked shell calls with unrepaired command-quality errors are quarantined into harmless diagnostic shell calls so Codex receives tool feedback and can continue the normal loop without running the bad command. Hosted `web_search` calls are routed to bounded shell metadata fetches when a URL can be derived. Structured calls with remaining error-level issues are suppressed before Codex can execute them; Open Gate returns a short diagnostic message instead of the bad tool call. It does not rewrite risky shell semantics such as replacing `&&` with `;`.
 
 ## CLI Usage
 

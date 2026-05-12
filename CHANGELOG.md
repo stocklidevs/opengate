@@ -8,6 +8,35 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.6.11 - 2026-05-11
+
+- Added schema-aware handling for Codex's hosted `web_search` tool shape, including type-only tool specs such as `{"type":"web_search"}`.
+- Converted upstream `web_search`/browser-style URL calls into bounded PowerShell `shell` metadata fetches, because Codex CLI does not execute returned `function_call` items named `web_search`.
+- Added URL cleanup and `site:domain` query handling for web-search-shaped model calls.
+- Added a non-artifact repeated-URL terminal message so failed URL inspection tasks end cleanly instead of looping through diagnostic shell calls.
+
+## 0.6.10 - 2026-05-11
+
+- Quarantined structured shell calls with command-quality errors into safe diagnostic shell calls instead of dropping them when assistant prose is also present.
+- Added capture reporting for `structured_command_quality_quarantines`.
+- Recorded the Qwen3.6 live stuck-feeling case where an unbounded reference-site fetch was correctly blocked but previously left Codex without actionable tool feedback.
+
+## 0.6.9 - 2026-05-11
+
+- Added upstream capability probing for Responses protocol support, including user input, `developer` role, `system` role, and native tool-call history.
+- Decoupled protocol adaptation from spoon context compression: `--upstream-input-mode auto` can now flatten unsupported instruction roles even when `--context-policy full` is active.
+- Added a native-request retry path that automatically retries flattened input when an upstream server returns role/history validation errors such as `Unexpected message role`.
+- Made tool-discipline guardrail injection role-aware so OpenGate can avoid adding a `developer` message when probes show that the upstream rejects that role.
+- Updated benchmark reports to write partial output after every case and classify protocol incompatibilities separately from model/tool-call failures.
+- Updated live/proxy benchmark harnesses to wait for capability-probed OpenGate startup and expose capability probe controls.
+- Added capture reporting for unrecoverable stripped tool syntax, separating "OpenGate cleaned leaked text" from "OpenGate confidently promoted a tool call."
+
+## 0.6.8 - 2026-05-11
+
+- Added Qwen3.6-27B setup notes with the vLLM serving command, OpenGate autodetection expectations, and ready-to-run benchmark commands.
+- Updated the README and vLLM notes so the next model adaptation has documented setup, benchmark, and acceptance criteria before live validation begins.
+- Recorded the first Qwen3.6-27B direct smoke result: `9/9` strict successes with zero leaks, invalid calls, or HTTP errors at `max_model_len = 65536`.
+
 ## 0.6.7 - 2026-05-10
 
 - Added the friendly `opengate` console command alongside the existing `open-gate` command.

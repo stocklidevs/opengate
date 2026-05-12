@@ -18,6 +18,8 @@ class ConfigTests(unittest.TestCase):
                     "port": 8001,
                     "path": "/v1",
                     "model": "auto",
+                    "capability_probe": "off",
+                    "capability_probe_timeout": 3,
                 },
                 "proxy": {"context_policy": "spoon"},
             }
@@ -26,6 +28,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config["host"], "127.0.0.1")
         self.assertEqual(config["upstream_base_url"], "http://127.0.0.1:8001/v1")
         self.assertEqual(config["model"], "auto")
+        self.assertEqual(config["capability_probe"], "off")
+        self.assertEqual(config["capability_probe_timeout"], 3)
         self.assertEqual(config["context_policy"], "spoon")
 
     def test_cli_values_override_config_values(self) -> None:

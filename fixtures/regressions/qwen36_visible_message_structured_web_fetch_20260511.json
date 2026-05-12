@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "name": "qwen36_visible_message_structured_web_fetch_20260511",
+  "source_capture": "runs/manual-glm47-current/20260511-222851-310980-proxy-a09926fa.json",
+  "created_at": "2026-05-11T22:28:51+00:00",
+  "notes": "Qwen3.6 emitted assistant prose plus a structured shell call that fetched a reference site excerpt. Dropping only the bad structured call left Codex with no diagnostic tool result, so OpenGate must quarantine it into a safe shell call.",
+  "request": {
+    "model": "open-gate-auto",
+    "tool_choice": "auto",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Look at https://styles.refero.design/ and create a polished single-file interactive index.html."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell",
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"].",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeout_ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "upstream_response": {
+    "id": "resp_qwen36_visible_message_structured_web_fetch",
+    "object": "response",
+    "model": "Qwen3.6-27B",
+    "output": [
+      {
+        "id": "rs_qwen36_visible_message_structured_web_fetch",
+        "summary": [],
+        "type": "reasoning",
+        "content": [
+          {
+            "text": "The user wants me to inspect the reference site and then build the page. Let me inspect the reference site first using a lightweight shell command.",
+            "type": "reasoning_text"
+          }
+        ],
+        "status": null
+      },
+      {
+        "id": "msg_qwen36_visible_message_structured_web_fetch",
+        "content": [
+          {
+            "annotations": [],
+            "text": "\n\nLet me inspect the reference site first, then build the page.\n\n",
+            "type": "output_text",
+            "logprobs": null
+          }
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      },
+      {
+        "arguments": "{\"command\": \"powershell -Command \\\"(Invoke-WebRequest -Uri 'https://styles.refero.design/' -UseBasicParsing -TimeoutSec 10).Content.Substring(0,3000)\\\"\", \"timeout_ms\": 15000}",
+        "call_id": "chatcmpl-tool-b54f58ea1a296bf2",
+        "name": "shell",
+        "type": "function_call",
+        "id": "fc_qwen36_visible_message_structured_web_fetch",
+        "status": "completed"
+      }
+    ]
+  },
+  "expected": {
+    "no_text_leaks": true,
+    "no_invalid_tool_calls": true,
+    "no_command_quality_issues": true,
+    "minimum_structured_argument_repairs": 1,
+    "minimum_command_quality_suppressed_structured_calls": 1,
+    "minimum_structured_command_quality_quarantines": 1,
+    "expected_tool_calls": [
+      "shell"
+    ],
+    "expected_output_fragments": [
+      "Open Gate blocked an invalid shell command (unbounded_web_fetch)",
+      "Do not retry that route"
+    ]
+  }
+}
