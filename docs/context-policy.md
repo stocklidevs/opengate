@@ -1,6 +1,6 @@
 # Context Policy
 
-Open Gate `0.5.0` added a context compiler for Codex traffic sent to open local models. Open Gate `0.6.1` also injects a compact tool-discipline guardrail for native and flattened requests, even when `spoon` is not enabled. Open Gate `0.6.2` adds an upstream request diet for oversized Codex instructions and tool schemas. Open Gate `0.6.5` quarantines empty artifact writes into harmless diagnostic tool calls so Codex can continue the loop without truncating the target file. Open Gate `0.6.6` sends real Responses heartbeat events during long buffered upstream turns and repairs GLM's bare here-string artifact writes. Open Gate `0.6.7` adds config-first launch defaults and upstream model autodetection. Open Gate `0.6.9` separates protocol adaptation from spoon compression: unsupported roles and native tool-history shapes can be flattened by `--upstream-input-mode auto` even when `--context-policy full` is active.
+Open Gate `0.5.0` added a context compiler for Codex traffic sent to open local models. Open Gate `0.6.1` also injects a compact tool-discipline guardrail for native and flattened requests, even when `spoon` is not enabled. Open Gate `0.6.2` adds an upstream request diet for oversized Codex instructions and tool schemas. Open Gate `0.6.5` quarantines empty artifact writes into harmless diagnostic tool calls so Codex can continue the loop without truncating the target file. Open Gate `0.6.6` sends real Responses heartbeat events during long buffered upstream turns and repairs GLM's bare here-string artifact writes. Open Gate `0.6.7` adds config-first launch defaults and upstream model autodetection. Open Gate `0.6.9` separates protocol adaptation from spoon compression: unsupported roles and native tool-history shapes can be flattened by `--upstream-input-mode auto` even when `--context-policy full` is active. Open Gate `0.6.16` caps upstream output tokens by default. Open Gate `0.6.17` removes the default artifact-pressure/task-steering path so spoon mode stays a context and protocol tool, not an agent supervisor. Open Gate `0.6.18` preserves nested MCP namespace tools during request-diet compaction and records DeepSeek-Coder-V2-Lite as behavior-limited rather than known-good.
 
 ## Why
 
@@ -23,7 +23,7 @@ The app defaults now favor `spoon` for normal interactive use. Benchmark scripts
 
 Both modes now tell the upstream model which tool names are actually callable. This prevents a common open-model failure where the model prints a plausible but unsupported call such as `web_search`, `browser`, `write_file`, or `apply_patch` even though Codex did not advertise that tool.
 
-After input compilation, Open Gate can also reduce request overhead that is not part of `input`: the top-level Codex `instructions` string and the `tools` schema array. The defaults are `--instruction-policy auto` and `--tool-schema-policy auto`, which leave small requests alone but digest or compact large live Codex requests before they reach vLLM.
+After input compilation, Open Gate can also reduce request overhead that is not part of `input`: the top-level Codex `instructions` string, the `tools` schema array, and the maximum upstream generation size. The defaults are `--instruction-policy auto`, `--tool-schema-policy auto`, and `--upstream-max-output-tokens 4096`, which leave small prompts usable while preventing single-turn local generations from expanding until timeout.
 
 ## Run
 
@@ -61,7 +61,8 @@ Examples of inferred constraints:
 
 - `write_file` was unsupported, so use the advertised tools only;
 - `apply_patch` is not available unless it appears in the advertised tool names;
-- full HTML should be written to `index.html`, not echoed to stdout;
+- full file artifacts should be written to the requested target path, not echoed to stdout;
+- placeholder here-string markers are invalid; use a real PowerShell here-string containing the complete file content;
 - empty target artifacts should not be created or truncated as placeholders; write the complete requested file content in one valid tool call;
 - Bash heredoc syntax such as `cat > file << EOF` is not valid in Windows PowerShell; Open Gate can repair simple cases into a PowerShell here-string plus `Set-Content`;
 - bare PowerShell here-strings followed by `-Path`/`-Encoding` are incomplete file writes; Open Gate can repair them into `Set-Content`;
@@ -88,6 +89,9 @@ Proxy captures include these fields under `upstream.transform`:
 | `tool_schema_diet_applied` | Whether tool schemas were compacted before forwarding upstream. |
 | `tools_original_chars` / `tools_sent_chars` | Tool schema size before and after request diet. |
 | `upstream_body_chars` | Estimated JSON body size forwarded to the upstream model server. |
+| `upstream_max_output_tokens` | Active output-token cap sent to the upstream request; `null` means disabled. |
+| `max_output_tokens_sent` | Final `max_output_tokens` value sent upstream. |
+| `max_output_tokens_added` / `max_output_tokens_capped` | Whether Open Gate added a missing cap or lowered a larger client cap. |
 
 `python -m open_gate.codex_report ... --summary-only` reports aggregate context metrics such as `spoon_context_requests`, `max_flattened_chars`, `max_original_flattened_chars`, and `dropped_context_chars`.
 

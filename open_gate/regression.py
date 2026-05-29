@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from .benchmark import collect_responses_tool_calls, collect_text, validate_with_linter_schema
@@ -140,11 +142,44 @@ def fixture_failures(result: JsonObject, expected: JsonObject) -> list[str]:
     if actual_policy_quarantines < minimum_policy_quarantines:
         failures.append(f"expected at least {minimum_policy_quarantines} policy quarantine(s), got {actual_policy_quarantines}")
 
-    text = json.dumps(result["normalized_output"], ensure_ascii=True)
+    text = json.dumps(result["normalized_output"], ensure_ascii=True) + "\n" + decoded_diagnostic_output_text(
+        result["normalized_output"]
+    )
     for fragment in expected.get("expected_output_fragments") or []:
         if str(fragment) not in text:
             failures.append(f"missing expected normalized output fragment: {fragment}")
     return failures
+
+
+def decoded_diagnostic_output_text(output: Any) -> str:
+    if not isinstance(output, list):
+        return ""
+    decoded: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") not in {"function_call", "custom_tool_call"}:
+            continue
+        try:
+            arguments = json.loads(str(item.get("arguments") or "{}"))
+        except json.JSONDecodeError:
+            continue
+        command = arguments.get("command") if isinstance(arguments, dict) else None
+        if not isinstance(command, list):
+            continue
+        lowered = [part.lower() if isinstance(part, str) else "" for part in command]
+        if "-encodedcommand" not in lowered:
+            continue
+        index = lowered.index("-encodedcommand")
+        if index + 1 >= len(command) or not isinstance(command[index + 1], str):
+            continue
+        try:
+            script = base64.b64decode(command[index + 1]).decode("utf-16le")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        decoded.append(script)
+        match = re.search(r"FromBase64String\('([^']+)'\)", script)
+        if match:
+            decoded.append(base64.b64decode(match.group(1)).decode("utf-8"))
+    return "\n".join(decoded)
 
 
 if __name__ == "__main__":

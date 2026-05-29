@@ -25,3 +25,4 @@ context_recent_items = 12
 instruction_policy = "auto"
 tool_schema_policy = "auto"
 stream_heartbeat_seconds = 2
+upstream_max_output_tokens = 4096

@@ -5,6 +5,7 @@ Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
 - Qwen3-Coder-Next checked on 2026-05-09.
 - GLM-4.7-Flash checked on 2026-05-10.
 - Qwen3.6-27B basic smoke checked on 2026-05-11 UTC, 2026-05-10 America/New_York.
+- DeepSeek-Coder-V2-Lite-Instruct checked on 2026-05-28.
 
 ## Suites
 
@@ -14,6 +15,7 @@ Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
 - Expected behavior: structured `shell` or `update_plan` calls.
 - One run against direct Qwen/vLLM: 3/3 strict successes.
 - Three runs against direct GLM-4.7-Flash/vLLM: 0/9 strict successes.
+- Three runs against direct DeepSeek-Coder-V2-Lite-Instruct/vLLM: 0/9 strict successes.
 
 `fixtures/benchmarks/codex_tool_leak_stress.json`
 
@@ -22,6 +24,7 @@ Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
 - No tool syntax leaked into text.
 - One case embedded `recipient_name`/`functions.shell` strings inside the structured `update_plan` arguments, counted as `argument_leak`.
 - Three runs against direct GLM-4.7-Flash/vLLM: 0/12 strict successes, with text leakage in 12/12 cases.
+- Three runs against direct DeepSeek-Coder-V2-Lite-Instruct/vLLM: 0/12 strict successes, with text leakage in 6/12 cases.
 
 ## Current Interpretation
 
@@ -78,25 +81,62 @@ These are direct vLLM results before Open Gate repairs. Run counts differ becaus
 | `codex_shell_smoke` | Qwen3-Coder-Next | 1 | 3/3, 100% | 0/3, 0% | 0/3, 0% | 0/3, 0% | 0/3, 0% | 0/3, 0% |
 | `codex_shell_smoke` | Qwen3.6-27B | 3 | 9/9, 100% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% |
 | `codex_shell_smoke` | GLM-4.7-Flash | 3 | 0/9, 0% | 6/9, 66.67% | 0/9, 0% | 9/9, 100% | 0/9, 0% | 0/9, 0% |
+| `codex_shell_smoke` | DeepSeek-Coder-V2-Lite-Instruct | 3 | 0/9, 0% | 0/9, 0% | 0/9, 0% | 9/9, 100% | 0/9, 0% | 0/9, 0% |
 | `codex_tool_leak_stress` | Qwen3-Coder-Next | 1 | 3/4, 75% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% |
 | `codex_tool_leak_stress` | GLM-4.7-Flash | 3 | 0/12, 0% | 12/12, 100% | 1/12, 8.33% | 12/12, 100% | 0/12, 0% | 0/12, 0% |
+| `codex_tool_leak_stress` | DeepSeek-Coder-V2-Lite-Instruct | 3 | 0/12, 0% | 6/12, 50% | 0/12, 0% | 9/12, 75% | 0/12, 0% | 0/12, 0% |
 | `qwen_serious_tool_stress` | Qwen3-Coder-Next | 3 | 43/60, 71.67% | 10/60, 16.67% | 0/60, 0% | not recorded | 4/60, 6.67% | 0/60, 0% |
 | `qwen_serious_tool_stress` | Qwen3.6-27B | 1 | 0/20, 0% | 0/20, 0% | 0/20, 0% | 15/20, 75% | 0/20, 0% | 20/20, 100% |
 | `qwen_serious_tool_stress` | GLM-4.7-Flash | 1 | 2/20, 10% | 17/20, 85% | 5/20, 25% | 15/20, 75% | 1/20, 5% | 0/20, 0% |
+| `qwen_serious_tool_stress` | DeepSeek-Coder-V2-Lite-Instruct | 3 | 9/60, 15% | 18/60, 30% | 0/60, 0% | 45/60, 75% | 9/60, 15% | 0/60, 0% |
 
-## Prepared Qwen3.6-27B Benchmark
+## Model Adaptation Scorecard
 
-The next target is `Qwen3.6-27B` served from `Qwen/Qwen3.6-27B` with vLLM `--max-model-len 65536`, `--reasoning-parser qwen3`, `--enable-auto-tool-choice`, and `--tool-call-parser qwen3_coder`. The benchmark should be read in this order:
+This table records the practical Codex-backend status after each model's baseline and OpenGate repair pass. `Known-good` requires more than clean wire format: the model also has to behave reliably enough in live Codex loops.
+
+| Model | Baseline Score | Best OpenGate Repair Score | Live Codex Status | Decision |
+| --- | ---: | ---: | --- | --- |
+| Qwen3-Coder-Next | `43/60` serious strict successes | `60/60` serious strict successes | Known-good first live smoke | Keep as the known-good local baseline |
+| GLM-4.7-Flash | `2/20` serious strict successes | `20/20` repair/full, `19/20` repair/spoon | Synthetic repair validated | Keep as repaired for the GLM leak dialect |
+| Qwen3.6-27B | `9/9` direct smoke, but `0/20` direct serious due to protocol errors | `14/17` derived strict successes on partial repair/spoon | Parked after live task-progress/runtime failures | Do not optimize further until a clean proxy-layer failure appears |
+| DeepSeek-Coder-V2-Lite-Instruct | `9/60` serious strict successes | `48/60` repair/full, `17/20` repair/spoon | Protocol-clean latest smoke, but behavior-limited | Parked: leaks/protocol are repaired, but the model does not behave reliably enough for Codex; do not repair model behavior |
+
+## DeepSeek-Coder-V2-Lite Synthetic Repair Baseline
+
+`DeepSeek-Coder-V2-Lite-Instruct` was served from `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` with vLLM `0.20.1`, `max_model_len` 16384, `--tool-call-parser deepseek_v3`, the DeepSeek v3 tool chat template, and `--performance-mode interactivity`. Full setup and repair triage are in `docs\deepseek-coder-v2-lite.md`.
+
+Direct synthetic runs were protocol-clean: zero HTTP, transport, or role-shape errors. The dominant raw failure was unstructured tool text rather than endpoint rejection.
+
+OpenGate comparison on `qwen_serious_tool_stress`:
+
+| Mode | Context Policy | Strict Success | Text Leaks | Missed Tool Calls | Wrong Tools | Invalid Tool Calls | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| direct vLLM | n/a | 9/60, 15% | 18/60, 30% | 45/60, 75% | 6/60, 10% | 9/60, 15% | Raw endpoint completes but often emits tool syntax as text |
+| OpenGate `observe` | `full` | 3/20, 15% | 6/20, 30% | 15/20, 75% | 2/20, 10% | 3/20, 15% | Raw output preserved while normalization opportunities are recorded |
+| OpenGate `repair` before DeepSeek parser | `full` | 12/60, 20% | 0/60 legacy markers | 42/60, 70% | 6/60, 10% | 0/60, 0% | Capture scan found DeepSeek delimiters not yet detected as leaks |
+| OpenGate `repair` before DeepSeek parser | `spoon` | 9/20, 45% | 1/20 legacy markers | 10/20, 50% | 0/20, 0% | 0/20, 0% | Same parser family still needed repair |
+| OpenGate `repair` after accepted repairs | `full` | 48/60, 80% | 0/60, 0% | 12/60, 20% | 3/60, 5% | 0/60, 0% | DeepSeek delimiters, partial markers, `function.parameters`, and negative-tool diagnostics repaired |
+| OpenGate `repair` after accepted repairs | `spoon` | 17/20, 85% | 0/20, 0% | 3/20, 15% | 0/20, 0% | 0/20, 0% | Compact-context setting kept the zero-leak and zero-invalid guarantee |
+
+The accepted repair candidates were model-agnostic and are now covered by tests and regression fixtures: parse DeepSeek/vLLM delimited function text into Responses `function_call` items, strip partial DeepSeek close/output markers, treat JSON `function.parameters` as arguments when `function.arguments` is absent, avoid adding diagnostic shell calls after negative-tool-intent no-tool prompts, and neutralize residual literal `<tool_call>` tag text.
+
+Live Codex smoke is no longer protocol-blocked. The first `repair/spoon` smoke completed `3/3` Codex turns without leaks or policy blocks, but all `3/3` upstream requests returned HTTP 400 validation errors because OpenGate's request-diet compaction dropped nested child tools from Codex MCP namespace schemas. OpenGate now preserves nested namespace tools recursively. The latest workspace-write `repair/spoon` smoke recorded `3/3` completed turns, `0` upstream errors, `1` command execution, zero returned leaks, zero returned invalid calls, zero returned command-quality issues, and `returned_clean_capture_rate = 1.0`. It remains behavior-limited, not known-good, because the no-tool documentation answer still includes DeepSeek chat-template preamble text. We are parking it here: the remaining issue is model behavior, and OpenGate should not add task-steering or model-behavior repair for this target.
+
+## Qwen3.6-27B Validation Status
+
+`Qwen3.6-27B` was served from `Qwen/Qwen3.6-27B` with vLLM `--max-model-len 65536`, `--reasoning-parser qwen3`, `--enable-auto-tool-choice`, and `--tool-call-parser qwen3_coder`. The recorded score path is:
 
 1. Direct `codex_shell_smoke`, three runs: complete, `9/9` strict successes.
 2. Direct `qwen_serious_tool_stress`, one run: complete, `0/20` due to protocol incompatibility, not model leakage.
-3. OpenGate `repair/full` on `qwen_serious_tool_stress`, three runs.
+3. OpenGate `repair/full` on `qwen_serious_tool_stress`: still pending.
 4. OpenGate `repair/spoon` on `qwen_serious_tool_stress`, one partial run: `17/20` captures completed before the external command timeout, `14/17` derived strict successes, zero returned leaks, invalid calls, or command-quality issues.
-5. Live Codex software-build suite in a disposable writable folder.
+5. Live Codex software-build and Refero-style artifact runs: parked, because the remaining failures were task-progress/runtime behavior rather than clean proxy repair.
 
 Prepared commands and result placeholders are in `docs\qwen3-6-27b.md`.
 
 OpenGate `0.6.9` changes benchmark interpretation for this case: `HTTP 400: Unexpected message role` is classified as a protocol incompatibility, and direct raw results should not be presented as ordinary tool-call failures. The proxy path addresses this by probing upstream role support and flattening unsupported native Responses input.
+
+Qwen3.6 should not be treated as the next OpenGate optimization target right now. The reason is not a single missing repair rule: direct serious requests are rejected by the vLLM Responses endpoint before generation, while live Codex runs that get past protocol adaptation show long stalls, planning loops, wrong tool choice, malformed file writes, and task-progress drift. The temporary artifact-pressure fixes improved one Refero `index.html` path, but they inferred task state from prompts and tool output, which crosses OpenGate's intended boundary. As of OpenGate `0.6.17`, those task-steering hooks are removed; Qwen3.6 stays recorded as a benchmark target until a repeatable failure clearly belongs to transport, protocol adaptation, tool-call repair, or command-quality quarantine.
 
 ## GLM-4.7-Flash Direct Baseline
 

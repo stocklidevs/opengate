@@ -86,11 +86,35 @@ PY_CALL_RE = re.compile(r"(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*\(")
 RECIPIENT_ASSIGN_RE = re.compile(r"\brecipient_name\s*=\s*functions\.[A-Za-z0-9_.:-]+\b", re.IGNORECASE)
 TO_FUNCTIONS_ASSIGN_RE = re.compile(r"\bto\s*=\s*functions\.[A-Za-z0-9_.:-]+\b", re.IGNORECASE)
 FUNCTION_NAMESPACE_CALL_RE = re.compile(r"\b(?:functions|tools)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.IGNORECASE)
+TOOL_CALL_LITERAL_RE = re.compile(r"</?tool_calls?>", re.IGNORECASE)
+DEEPSEEK_TOOL_MARKER = r"<\uff5ctool\u2581(?:call|calls|output|outputs)\u2581(?:begin|end)\uff5c>|<\uff5ctool\u2581sep\uff5c>"
+DEEPSEEK_TOOL_MARKER_RE = re.compile(DEEPSEEK_TOOL_MARKER, re.DOTALL)
+DEEPSEEK_TOOL_OUTPUTS_RE = re.compile(
+    r"<\uff5ctool\u2581outputs\u2581begin\uff5c>.*?(?:<\uff5ctool\u2581outputs\u2581end\uff5c>|$)",
+    re.DOTALL,
+)
+DEEPSEEK_PARTIAL_TOOL_FRAGMENT_RE = re.compile(
+    r"```(?:json|tool_code|tool_call)?\s*.*?\s*```"
+    r"(?=\s*(?:<\uff5ctool\u2581call\u2581end\uff5c>|<\uff5ctool\u2581calls\u2581end\uff5c>|<\uff5ctool\u2581outputs\u2581begin\uff5c>))"
+    r"(?:\s*<\uff5ctool\u2581call\u2581end\uff5c>)?"
+    r"(?:\s*<\uff5ctool\u2581calls\u2581end\uff5c>)?"
+    r"(?:\s*<\uff5ctool\u2581outputs\u2581begin\uff5c>.*?(?:<\uff5ctool\u2581outputs\u2581end\uff5c>|$))?",
+    re.IGNORECASE | re.DOTALL,
+)
+DEEPSEEK_TOOL_CALL_RE = re.compile(
+    r"<\uff5ctool\u2581call\u2581begin\uff5c>\s*function\s*<\uff5ctool\u2581sep\uff5c>\s*"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*"
+    r"(?P<body>.*?)(?:<\uff5ctool\u2581call\u2581end\uff5c>|$)"
+    r"(?:\s*<\uff5ctool\u2581calls\u2581end\uff5c>)?"
+    r"(?:\s*<\uff5ctool\u2581outputs\u2581begin\uff5c>.*?(?:<\uff5ctool\u2581outputs\u2581end\uff5c>|$))?",
+    re.DOTALL,
+)
 SUSPICIOUS_PATTERNS = {
-    "tool_call_tag": re.compile(r"</?tool_calls?>", re.IGNORECASE),
+    "tool_call_tag": TOOL_CALL_LITERAL_RE,
     "function_tag": re.compile(r"<function=", re.IGNORECASE),
     "responses_recipient": re.compile(r"\brecipient_name\b|\bto=functions\.", re.IGNORECASE),
     "tool_namespace": re.compile(r"\b(?:functions|tools)\.[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE),
+    "deepseek_v3_tool_marker": DEEPSEEK_TOOL_MARKER_RE,
 }
 
 
@@ -132,6 +156,20 @@ def analyze_text(text: str, tools: list[JsonObject] | JsonObject | None = None) 
     calls: list[ToolCall] = []
     errors: list[str] = []
     suspicious_spans: list[tuple[int, int]] = []
+
+    for match in DEEPSEEK_TOOL_CALL_RE.finditer(text):
+        suspicious_spans.append(match.span())
+        parsed_calls = _calls_from_deepseek_tool_call(match)
+        calls.extend(parsed_calls)
+
+    for match in DEEPSEEK_PARTIAL_TOOL_FRAGMENT_RE.finditer(text):
+        suspicious_spans.append(match.span())
+
+    for match in DEEPSEEK_TOOL_OUTPUTS_RE.finditer(text):
+        suspicious_spans.append(match.span())
+
+    for match in DEEPSEEK_TOOL_MARKER_RE.finditer(text):
+        suspicious_spans.append(match.span())
 
     for match in TOOL_TAG_RE.finditer(text):
         suspicious_spans.append(match.span())
@@ -225,6 +263,7 @@ def _contains_raw_tool_syntax(payload: str) -> bool:
 
 def _sanitize_residual_tool_syntax(text: str) -> str:
     cleaned = RESPONSE_TAG_LITERAL_RE.sub("", text)
+    cleaned = TOOL_CALL_LITERAL_RE.sub("tool call", cleaned)
     cleaned = RECIPIENT_ASSIGN_RE.sub("", cleaned)
     cleaned = TO_FUNCTIONS_ASSIGN_RE.sub("", cleaned)
     cleaned = re.sub(r"\brecipient_name\b", "recipient name", cleaned, flags=re.IGNORECASE)
@@ -260,6 +299,25 @@ def _calls_from_glm_tool_call(payload: str, outer_span: tuple[int, int]) -> list
     if not args:
         return []
     return [ToolCall(name=name, arguments=args, source="glm_tool_call_tag", span=outer_span, raw=payload)]
+
+
+def _calls_from_deepseek_tool_call(match: re.Match[str]) -> list[ToolCall]:
+    name = match.group("name")
+    if name.startswith("functions."):
+        name = name.split(".", 1)[1]
+    args = _deepseek_tool_call_arguments(match.group("body"))
+    if args is None:
+        return []
+    return [ToolCall(name=name, arguments=args, source="deepseek_v3_tool_call", span=match.span(), raw=match.group(0))]
+
+
+def _deepseek_tool_call_arguments(body: str) -> JsonObject | None:
+    fenced = FENCED_JSON_RE.search(body)
+    payload = fenced.group("body") if fenced else body
+    parsed = _json_loads_relaxed(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    return None
 
 
 def _parse_glm_arg_value(value: str) -> Any:
@@ -298,7 +356,12 @@ def _normalise_call_object(value: JsonObject) -> tuple[str | None, JsonObject]:
     function = value.get("function")
     if isinstance(function, dict):
         name = function.get("name")
-        args = function.get("arguments", {})
+        if "arguments" in function:
+            args = function.get("arguments", {})
+        elif isinstance(function.get("parameters"), dict):
+            args = function.get("parameters", {})
+        else:
+            args = {}
     else:
         name = value.get("name") or value.get("tool") or value.get("tool_name") or value.get("recipient_name")
         if any(key in value for key in ("arguments", "parameters", "args")):

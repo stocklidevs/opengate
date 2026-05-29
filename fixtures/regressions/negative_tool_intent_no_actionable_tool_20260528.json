@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "name": "negative_tool_intent_no_actionable_tool_20260528",
+  "source_capture": "runs\\deepseek_v2_lite_open_gate_repair_full_r3\\captures\\20260528-031229-899821-proxy-558d5c3d.json",
+  "created_at": "2026-05-28T03:38:15.119207+00:00",
+  "notes": "No-tool documentation prompts should not receive OpenGate diagnostic shell calls after sample syntax is stripped.",
+  "request": {
+    "model": "DeepSeek-Coder-V2-Lite-Instruct",
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "stream": false,
+    "store": false,
+    "temperature": 0.0,
+    "max_output_tokens": 512,
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Without using any tools, show me the JSON tool_calls array Codex would send for shell. This is only documentation, not execution."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell",
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to shell are passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"].",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "description": "The command to execute.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workdir": {
+              "type": "string",
+              "description": "The working directory to execute the command in."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "The timeout for the command in milliseconds."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "update_plan",
+        "description": "Updates the task plan.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "explanation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "plan"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "view_image",
+        "description": "View a local image from the filesystem.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local filesystem path to an image file."
+            },
+            "detail": {
+              "type": "string",
+              "description": "Optional detail override."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "upstream_response": {
+    "id": "resp_a9fe298bd09e0b17",
+    "created_at": 1779937947,
+    "incomplete_details": null,
+    "instructions": null,
+    "metadata": null,
+    "model": "DeepSeek-Coder-V2-Lite-Instruct",
+    "object": "response",
+    "output": [
+      {
+        "id": "msg_bdd4b0c9cf58f75e",
+        "content": [
+          {
+            "annotations": [],
+            "text": "\n```json\n{\n  \"tool_calls\": [\n    {\n      \"id\": \"shell\",\n      \"type\": \"function\",\n      \"function\": {\n        \"name\": \"shell\",\n        \"parameters\": {\n          \"command\": [],\n          \"workdir\": \"\",\n          \"timeout_ms\": 0\n        }\n      }\n    }\n  ]\n}\n```",
+            "type": "output_text",
+            "logprobs": null
+          }
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+        "phase": null
+      }
+    ],
+    "parallel_tool_calls": true,
+    "temperature": 0.0,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "name": "shell",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "description": "The command to execute.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workdir": {
+              "type": "string",
+              "description": "The working directory to execute the command in."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "The timeout for the command in milliseconds."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to shell are passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"]."
+      },
+      {
+        "name": "update_plan",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "explanation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "plan"
+          ],
+          "additionalProperties": false
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Updates the task plan."
+      },
+      {
+        "name": "view_image",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local filesystem path to an image file."
+            },
+            "detail": {
+              "type": "string",
+              "description": "Optional detail override."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "View a local image from the filesystem."
+      }
+    ],
+    "top_p": 1.0,
+    "background": false,
+    "max_output_tokens": 512,
+    "max_tool_calls": null,
+    "previous_response_id": null,
+    "prompt": null,
+    "reasoning": null,
+    "service_tier": "auto",
+    "status": "completed",
+    "text": null,
+    "top_logprobs": null,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 530,
+      "input_tokens_details": {
+        "cached_tokens": 528,
+        "input_tokens_per_turn": [],
+        "cached_tokens_per_turn": []
+      },
+      "output_tokens": 91,
+      "output_tokens_details": {
+        "reasoning_tokens": 0,
+        "tool_output_tokens": 0,
+        "output_tokens_per_turn": [],
+        "tool_output_tokens_per_turn": []
+      },
+      "total_tokens": 621
+    },
+    "user": null,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "kv_transfer_params": null,
+    "input_messages": null,
+    "output_messages": null
+  },
+  "expected": {
+    "no_text_leaks": true,
+    "no_invalid_tool_calls": true,
+    "no_command_quality_issues": true,
+    "minimum_structured_argument_repairs": 0,
+    "minimum_text_tool_call_repairs": 1,
+    "expected_tool_calls": []
+  },
+  "observed_after_normalization": {
+    "structured_argument_repairs": [],
+    "text_leaks": [],
+    "command_quality_issues": []
+  }
+}

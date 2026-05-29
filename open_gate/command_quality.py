@@ -12,6 +12,8 @@ JsonObject = dict[str, Any]
 POWERSHELL_COMMAND_FLAGS = {"-command", "-c", "/command", "/c"}
 POWERSHELL_EXE_RE = re.compile(r"(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$", re.IGNORECASE)
 WINDOWS_POWERSHELL_EXE_RE = re.compile(r"(?:^|[\\/])powershell(?:\.exe)?$", re.IGNORECASE)
+SHELL_EXE_RE = re.compile(r"(?:^|[\\/])(?:powershell|pwsh|cmd)(?:\.exe)?$", re.IGNORECASE)
+SHELL_METADATA_KEYS = {"justification", "prefix_rule", "sandbox_permissions"}
 POWERSHELL_CMDLET_VERBS = {
     "add",
     "clear",
@@ -62,6 +64,39 @@ POWERSHELL_CMDLET_VERBS = {
     "where",
     "write",
 }
+POWERSHELL_ALIAS_COMMANDS = {
+    "cat",
+    "cd",
+    "chdir",
+    "cls",
+    "copy",
+    "cp",
+    "del",
+    "dir",
+    "echo",
+    "erase",
+    "gc",
+    "gci",
+    "gi",
+    "ls",
+    "md",
+    "measure",
+    "mi",
+    "move",
+    "mv",
+    "ni",
+    "pwd",
+    "rd",
+    "ren",
+    "rm",
+    "rmdir",
+    "sc",
+    "select",
+    "sls",
+    "sort",
+    "type",
+    "where",
+}
 POWERSHELL_OPERATOR_TOKENS = {"|", ">", ">>", "2>", "2>>", "2>&1", "<", ";", "&&", "||"}
 IMAGE_EXTENSIONS = {
     ".avif",
@@ -75,17 +110,36 @@ IMAGE_EXTENSIONS = {
     ".webp",
 }
 ARTIFACT_EXTENSIONS = {
+    ".bat",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
     ".css",
     ".csv",
+    ".cxx",
+    ".go",
+    ".h",
+    ".hpp",
     ".html",
     ".htm",
+    ".java",
     ".js",
     ".json",
     ".jsx",
+    ".kt",
+    ".kts",
+    ".lua",
     ".md",
     ".mjs",
+    ".php",
     ".ps1",
     ".py",
+    ".rb",
+    ".rs",
+    ".sh",
+    ".sql",
+    ".swift",
     ".toml",
     ".ts",
     ".tsx",
@@ -130,7 +184,7 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
     if isinstance(command, str):
         repaired = parse_shell_array_string(command) or ["powershell.exe", "-Command", command]
         nested = repair_shell_command_argument(repaired)
-        return [
+        issues = [
             {
                 "tool": "shell",
                 "issue": "string_command",
@@ -142,6 +196,10 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
                 "message": "The shell command should be a CreateProcessW-style argument array.",
             }
         ]
+        effective = nested or repaired
+        if looks_like_executable_only_shell_command(effective):
+            issues.append(executable_only_shell_command_issue(effective, arguments, source))
+        return issues
 
     if not isinstance(command, list):
         return [
@@ -180,6 +238,9 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
             }
         )
         return issues
+
+    if looks_like_executable_only_shell_command(command):
+        issues.append(executable_only_shell_command_issue(command, arguments, source))
 
     repaired = repair_shell_command_argument(command)
     if repaired is not None:
@@ -222,7 +283,7 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
                 "repairable": True,
                 "command": command,
                 "repaired_command": repaired,
-                "message": "PowerShell cmdlets such as Get-ChildItem, Set-Content, or Write-Host must run through powershell.exe -Command.",
+                "message": "PowerShell cmdlets and aliases such as dir, Get-ChildItem, Set-Content, or Write-Host must run through powershell.exe -Command.",
             }
         )
 
@@ -269,6 +330,18 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
                 "source": source,
                 "command": command,
                 "message": "PowerShell here-string headers must be followed immediately by a real newline, not escaped `n text.",
+            }
+        )
+
+    if contains_malformed_powershell_here_string(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "malformed_powershell_here_string",
+                "severity": "error",
+                "source": source,
+                "command": command,
+                "message": "The command contains malformed PowerShell here-string syntax for file content.",
             }
         )
 
@@ -329,7 +402,7 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
                 "severity": "error",
                 "source": source,
                 "command": command,
-                "message": "The command appears to print an HTML document to stdout instead of writing index.html.",
+                "message": "The command appears to print an HTML document to stdout instead of writing the requested HTML file.",
             }
         )
 
@@ -809,10 +882,53 @@ def is_windows_powershell_executable(value: str) -> bool:
     return bool(WINDOWS_POWERSHELL_EXE_RE.search(value.strip().strip("\"'")))
 
 
+def is_shell_executable(value: str) -> bool:
+    return bool(SHELL_EXE_RE.search(value.strip().strip("\"'")))
+
+
+def looks_like_executable_only_shell_command(command: list[str]) -> bool:
+    if not command:
+        return False
+    if len(command) == 1:
+        return is_shell_executable(command[0])
+    if is_shell_executable(command[0]) and len(command) == 2 and command[1].lower() in POWERSHELL_COMMAND_FLAGS:
+        return True
+    if is_powershell_command_vector(command) and len(command) >= 3:
+        return looks_like_shell_executable_script(command[2])
+    return False
+
+
+def looks_like_shell_executable_script(script: str) -> bool:
+    tokens = split_command_line(script.strip())
+    if tokens and tokens[0] == "&":
+        tokens = tokens[1:]
+    return len(tokens) == 1 and is_shell_executable(tokens[0])
+
+
+def executable_only_shell_command_issue(command: list[str], arguments: JsonObject, source: str) -> JsonObject:
+    metadata_keys = sorted(key for key in SHELL_METADATA_KEYS if key in arguments)
+    message = "The shell call only invokes a shell executable and does not include a useful command script."
+    if metadata_keys:
+        message += " Approval metadata fields cannot stand in for the command script."
+    issue: JsonObject = {
+        "tool": "shell",
+        "issue": "executable_only_command",
+        "severity": "error",
+        "source": source,
+        "command": command,
+        "message": message,
+    }
+    if metadata_keys:
+        issue["metadata_keys"] = metadata_keys
+    return issue
+
+
 def looks_like_powershell_cmdlet(value: str) -> bool:
     stripped = value.strip().strip("\"'")
     if "\\" in stripped or "/" in stripped or "." in path_last_segment(stripped):
         return False
+    if stripped.lower() in POWERSHELL_ALIAS_COMMANDS:
+        return True
     if "-" not in stripped:
         return False
     verb = stripped.split("-", 1)[0].lower()
@@ -820,11 +936,46 @@ def looks_like_powershell_cmdlet(value: str) -> bool:
 
 
 def contains_powershell_chain_operator(script: str) -> bool:
-    return bool(re.search(r"(?<!&)&&(?!&)", strip_powershell_here_strings(script)))
+    return bool(re.search(r"(?<!&)&&(?!&)", strip_powershell_string_literals(script)))
 
 
 def strip_powershell_here_strings(script: str) -> str:
     return re.sub(r"@(['\"])\r?\n.*?\r?\n\1@", "", script, flags=re.DOTALL)
+
+
+def strip_powershell_string_literals(script: str) -> str:
+    script = strip_powershell_here_strings(script)
+    out: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(script):
+        char = script[index]
+        if quote == "'":
+            if char == "'" and index + 1 < len(script) and script[index + 1] == "'":
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "`":
+                index += 2
+                continue
+            if char == '"' and index + 1 < len(script) and script[index + 1] == '"':
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def contains_bash_heredoc(script: str) -> bool:
@@ -834,6 +985,19 @@ def contains_bash_heredoc(script: str) -> bool:
 
 def contains_bad_here_string_header(script: str) -> bool:
     return bool(re.search(r"@['\"]`n\S", script))
+
+
+def contains_malformed_powershell_here_string(script: str) -> bool:
+    if not re.search(r"\b(?:Set-Content|Out-File|WriteAllText)\b", script, re.IGNORECASE):
+        return False
+    scrubbed = strip_powershell_here_strings(script)
+    if re.search(r"@['\"](?!\r?\n)", scrubbed):
+        return True
+    if re.search(r"(?<!\S)-Value\s+@(?!(?:['\"]\r?\n|\(|\{))\S+", scrubbed, re.IGNORECASE):
+        return True
+    if re.search(r"WriteAllText\s*\([^,]+,\s*@(?!(?:['\"]\r?\n))\S+", scrubbed, re.IGNORECASE | re.DOTALL):
+        return True
+    return False
 
 
 def looks_like_malformed_json_array_command(script: str) -> bool:

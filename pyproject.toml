@@ -1,6 +1,6 @@
 [project]
 name = "open-gate"
-version = "0.6.11"
+version = "0.6.18"
 description = "Local Responses API capture harness and tool-call leakage linter for open coding models."
 requires-python = ">=3.11"
 dependencies = []

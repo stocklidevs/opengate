@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,12 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from .command_quality import (
-    EMPTY_ARTIFACT_WRITE_DIAGNOSTIC,
-    inspect_tool_calls,
-    parse_shell_array_string,
-    repair_shell_arguments,
-)
+from .command_quality import EMPTY_ARTIFACT_WRITE_DIAGNOSTIC, inspect_tool_calls, parse_shell_array_string, repair_shell_arguments
 from .linter import ToolCall, analyze_text, load_tool_specs
 
 
@@ -60,26 +56,20 @@ COMMAND_ISSUE_HINTS = {
     "nested_relative_cd": "Do not cd into the same relative directory already selected as shell workdir.",
     "view_image_non_image_path": "view_image expects an image file path, not a directory or project root.",
     "skill_file_as_mcp_resource": "Codex skills are local instruction files, not MCP resources.",
-    "html_echo_without_file_write": "Do not print a full HTML document to stdout; write the content to index.html.",
+    "html_echo_without_file_write": "Do not print a full HTML document to stdout; write the content to the requested HTML file.",
     "empty_artifact_write": "Do not create or truncate an empty target artifact; write the complete requested file content in one valid tool call.",
     "bash_heredoc_in_powershell": "Do not use Bash heredoc syntax in PowerShell; use a PowerShell here-string and Set-Content.",
     "unbounded_web_fetch": "Do not fetch or print a whole web page into context; use metadata, title, headings, or a small bounded excerpt.",
     "powershell_curl_unix_flags": "In PowerShell, curl is usually an Invoke-WebRequest alias; do not use Unix curl flags unless calling curl.exe explicitly.",
     "malformed_json_array_command": "Do not pass a malformed JSON command array as the PowerShell script; use a normal shell command array.",
+    "malformed_powershell_here_string": "PowerShell here-strings require @' or @\" followed by a real newline, complete content, and a matching terminator.",
     "split_powershell_command": "Pass one complete script string after powershell.exe -Command instead of splitting PowerShell parameters across the command array.",
     "direct_powershell_cmdlet": "Run PowerShell cmdlets through powershell.exe -Command; bare cmdlet names are not executable programs.",
+    "executable_only_command": "Do not call shell with only powershell.exe, pwsh, or cmd; pass one complete command array with the actual script.",
 }
 REPEATED_URL_INSPECTION_DIAGNOSTIC = (
     "Open Gate blocked a repeated external URL inspection. Do not inspect the URL again; proceed from the prompt "
-    "and create the requested artifact directly."
-)
-REPEATED_URL_ANSWER_DIAGNOSTIC = (
-    "Open Gate blocked a repeated external URL inspection after a prior attempt. The URL could not be inspected "
-    "in this run; answer from available context without more tool calls."
-)
-ARTIFACT_FIRST_DIAGNOSTIC = (
-    "Open Gate blocked a non-productive inspection while the requested index.html artifact is still missing. "
-    "Write the complete index.html file directly now."
+    "or use one smaller direct action."
 )
 HOSTED_WEB_SEARCH_UNSUPPORTED_DIAGNOSTIC = (
     "Open Gate blocked a hosted web_search call. Codex advertises web_search to hosted upstream models, "
@@ -100,6 +90,7 @@ COMMON_UNAVAILABLE_TOOL_ALIASES = (
     "edit",
     "apply_patch",
 )
+DIAGNOSTIC_SHELL_ARGUMENT_PASSTHROUGH = {"workdir", "timeout_ms", "login"}
 NATIVE_WEB_SEARCH_TOOL = "web_search"
 WEB_TOOL_ALIASES = {"web_search", "browser", "browse", "fetch", "http", "web", "web_fetch"}
 WEB_QUERY_ARGUMENT_KEYS = ("query", "q", "search_query", "url", "uri", "href", "target", "site", "website")
@@ -153,6 +144,7 @@ def forward_responses_request(
     instruction_policy: str = "auto",
     tool_schema_policy: str = "auto",
     upstream_capabilities: JsonObject | None = None,
+    upstream_max_output_tokens: int | None = None,
 ) -> ProxyResult:
     if normalization_mode not in {"repair", "observe"}:
         raise ValueError(f"Unsupported normalization mode: {normalization_mode}")
@@ -183,6 +175,7 @@ def forward_responses_request(
     upstream_transform["requested_model"] = requested_model
     upstream_transform["upstream_model"] = upstream_request.get("model")
     upstream_transform["model_overridden"] = bool(upstream_model and requested_model != upstream_model)
+    apply_upstream_output_token_cap(upstream_request, upstream_transform, upstream_max_output_tokens)
     status, upstream_response = post_json(upstream_base_url, "/responses", upstream_request, api_key, timeout)
     if should_retry_with_flattened_input(status, upstream_response, upstream_transform, upstream_input_mode):
         first_attempt = {
@@ -214,6 +207,7 @@ def forward_responses_request(
         upstream_transform["requested_model"] = requested_model
         upstream_transform["upstream_model"] = upstream_request.get("model")
         upstream_transform["model_overridden"] = bool(upstream_model and requested_model != upstream_model)
+        apply_upstream_output_token_cap(upstream_request, upstream_transform, upstream_max_output_tokens)
         status, upstream_response = post_json(upstream_base_url, "/responses", upstream_request, api_key, timeout)
     normalized_response, normalization = normalize_responses_response(upstream_response, request_body)
     returned_response = deepcopy(normalized_response if normalization_mode == "repair" else upstream_response)
@@ -230,6 +224,38 @@ def forward_responses_request(
         returned_response=returned_response,
         normalization=normalization,
     )
+
+
+def apply_upstream_output_token_cap(
+    request_body: JsonObject, transform: JsonObject, upstream_max_output_tokens: int | None
+) -> None:
+    if upstream_max_output_tokens is None or int(upstream_max_output_tokens) <= 0:
+        transform["upstream_max_output_tokens"] = None
+        transform["max_output_tokens_capped"] = False
+        return
+    cap = int(upstream_max_output_tokens)
+    existing = int_value(request_body.get("max_output_tokens"))
+    transform["upstream_max_output_tokens"] = cap
+    transform["max_output_tokens_before"] = existing
+    if existing is None or existing > cap:
+        request_body["max_output_tokens"] = cap
+        transform["max_output_tokens_sent"] = cap
+        transform["max_output_tokens_capped"] = existing is not None
+        transform["max_output_tokens_added"] = existing is None
+        return
+    transform["max_output_tokens_sent"] = existing
+    transform["max_output_tokens_capped"] = False
+    transform["max_output_tokens_added"] = False
+
+
+def int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
+        return int(value)
+    return None
 
 
 def transform_upstream_request(
@@ -389,7 +415,9 @@ def build_tool_guardrail_text(tools: list[JsonObject]) -> str:
     if unavailable:
         lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
     if "web_search" in tool_names and "shell" in tool_names:
-        lines.append("- web_search is hosted by Codex; Open Gate converts URL lookups from web_search into bounded shell metadata fetches.")
+        lines.append(
+            "- web_search is hosted by Codex; Open Gate converts URL lookups from web_search into bounded shell metadata fetches."
+        )
     elif "web_search" in tool_names:
         lines.append("- web_search is hosted by Codex and may not execute as a local function call.")
     else:
@@ -399,6 +427,7 @@ def build_tool_guardrail_text(tools: list[JsonObject]) -> str:
         lines.append("- If spawn_agent is explicitly requested, agent_type must be one of: default, explorer, worker.")
     if "shell" in tool_names:
         lines.append("- When using shell on Windows, keep commands small and direct, and prefer the workdir argument over inline cd.")
+        lines.append("- A shell call must include the real command script; never call only powershell.exe, pwsh, or cmd, and never put approval metadata inside command.")
     return "\n".join(lines)
 
 
@@ -473,10 +502,12 @@ def compact_tool_schema(tool: Any) -> Any:
         compacted["description"] = compact_one_line(tool["description"], TOOL_DESCRIPTION_MAX_CHARS)
     if "parameters" in tool:
         compacted["parameters"] = compact_json_schema(tool.get("parameters"))
+    if isinstance(tool.get("tools"), list):
+        compacted["tools"] = compact_tool_schemas(tool["tools"])
     if isinstance(tool.get("function"), dict):
         compacted["function"] = compact_tool_schema(tool["function"])
     for key, value in tool.items():
-        if key not in compacted and key not in {"description", "parameters", "function"}:
+        if key not in compacted and key not in {"description", "parameters", "tools", "function"}:
             if key in {"required", "additionalProperties", "enum"}:
                 compacted[key] = deepcopy(value)
     return compacted
@@ -731,7 +762,9 @@ def build_spoon_header(
         if unavailable:
             lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
         if "web_search" in tool_names and "shell" in tool_names:
-            lines.append("- web_search is hosted by Codex; Open Gate converts URL lookups from web_search into bounded shell metadata fetches.")
+            lines.append(
+                "- web_search is hosted by Codex; Open Gate converts URL lookups from web_search into bounded shell metadata fetches."
+            )
         elif "web_search" in tool_names:
             lines.append("- web_search is hosted by Codex and may not execute as a local function call.")
         else:
@@ -749,8 +782,9 @@ def build_spoon_header(
             lines.append("- view_image is only for local image files such as .png/.jpg/.webp, not directories, project roots, URLs, or webpages.")
         if "shell" in tool_names:
             lines.append("- shell commands run on Windows PowerShell here; use the workdir argument instead of inline relative cd when possible.")
-            lines.append("- To create index.html with shell, write to index.html; do not echo the full HTML document to stdout.")
-            lines.append("- If the task requires one index.html file, write the complete final file instead of creating or truncating an empty placeholder first.")
+            lines.append("- A shell call must include the real command script; never call only powershell.exe, pwsh, or cmd, and never put approval metadata inside command.")
+            lines.append("- To create a requested file with shell, write to that file path; do not echo the full file content to stdout.")
+            lines.append("- If the task requires one file artifact, write the complete final file instead of creating or truncating an empty placeholder first.")
             lines.append("- Do not use Bash heredoc syntax like cat > file << EOF in PowerShell; use a PowerShell here-string with Set-Content.")
     if user_constraints:
         lines.append("Durable user constraints:")
@@ -883,6 +917,10 @@ def constraints_from_tool_output(output: str) -> list[str]:
         constraints.append("External URL inspection was already attempted; do not call shell for that URL again.")
     if "open gate blocked an empty file write" in lowered or "empty_artifact_write" in lowered:
         constraints.append("Do not create or truncate empty artifact files; write the complete requested file content in one valid tool call.")
+    if "parsererror" in lowered or "unrecognized token" in lowered:
+        constraints.append("PowerShell rejected the previous command syntax; use one valid script string and a real here-string for file content.")
+    if "malformed_powershell_here_string" in lowered:
+        constraints.append("Do not use placeholder here-string markers; include the complete file content inside a valid PowerShell here-string.")
     if "not recognized as the name of" in lowered:
         constraints.append("A shell command was not recognized; verify commands before relying on them.")
     return constraints
@@ -1083,7 +1121,12 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
     if has_empty_artifact_quarantine([*repairs, *text_candidate_repairs]):
         removed_reasoning_items = remove_reasoning_items(normalized)
     actionable_output_repair = None
-    if not suppressed and not policy_suppressed and isinstance(normalized.get("output"), list):
+    if (
+        should_promote_tool_calls(original_request)
+        and not suppressed
+        and not policy_suppressed
+        and isinstance(normalized.get("output"), list)
+    ):
         actionable_output_repair = ensure_actionable_output(normalized, tools)
     normalized_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
 
@@ -1177,7 +1220,7 @@ def collect_existing_function_calls(response: JsonObject) -> list[JsonObject]:
 
 
 def route_web_tool_aliases(response: JsonObject, request_body: JsonObject, tools: list[JsonObject]) -> list[JsonObject]:
-    target = web_alias_shell_tool_name(tools)
+    target = web_alias_target_tool_name(tools)
     if target is None:
         return []
     output = response.get("output")
@@ -1212,7 +1255,7 @@ def route_web_tool_alias_item(
         return None
 
     before = deepcopy(arguments)
-    after = shell_web_metadata_arguments(query)
+    after = web_alias_target_arguments(query, target)
     if name == target and before == after:
         return None
 
@@ -1225,7 +1268,7 @@ def route_web_tool_alias_item(
         "before": before,
         "after_tool": target,
         "after": after,
-        "reason": route_reason,
+        "reason": web_tool_route_repair_reason(target, route_reason),
     }
 
 
@@ -1234,7 +1277,7 @@ def route_web_tool_alias_candidate(
     request_body: JsonObject,
     tools: list[JsonObject],
 ) -> tuple[ToolCall, JsonObject | None]:
-    target = web_alias_shell_tool_name(tools)
+    target = web_alias_target_tool_name(tools)
     if target is None:
         return call, None
     route_reason = web_tool_route_reason(call.name, call.arguments)
@@ -1244,7 +1287,7 @@ def route_web_tool_alias_candidate(
     if query is None:
         return call, None
 
-    after = shell_web_metadata_arguments(query)
+    after = web_alias_target_arguments(query, target)
     routed = ToolCall(
         name=target,
         arguments=after,
@@ -1260,12 +1303,31 @@ def route_web_tool_alias_candidate(
         "before": call.arguments,
         "after_tool": target,
         "after": after,
-        "reason": route_reason,
+        "reason": web_tool_route_repair_reason(target, route_reason),
     }
 
 
-def web_alias_shell_tool_name(tools: list[JsonObject]) -> str | None:
-    return "shell" if "shell" in load_tool_specs(tools) else None
+def web_alias_target_tool_name(tools: list[JsonObject]) -> str | None:
+    specs = load_tool_specs(tools)
+    if "shell" in specs:
+        return "shell"
+    if "update_plan" in specs:
+        return "update_plan"
+    return None
+
+
+def web_alias_target_arguments(query: str, target: str) -> JsonObject:
+    if target == "update_plan":
+        diagnostic = (
+            "Open Gate cannot execute returned web_search as a local function call in Codex CLI. "
+            f"Proceed from available context for {query}, or use shell if a bounded URL inspection is required."
+        )
+        return diagnostic_update_plan_arguments(diagnostic)
+    return shell_web_metadata_arguments(query)
+
+
+def web_tool_route_repair_reason(target: str, route_reason: str) -> str:
+    return route_reason
 
 
 def web_tool_route_reason(name: str, arguments: JsonObject) -> str | None:
@@ -1330,7 +1392,7 @@ def shell_web_metadata_arguments(query: str) -> JsonObject:
             "Open Gate cannot emulate keyword web_search with a local shell call because no URL was provided. "
             "Proceed from the prompt or ask for a URL."
         )
-        return {"command": ["powershell.exe", "-Command", "Write-Output " + powershell_quote(diagnostic)]}
+        return {"command": diagnostic_shell_command(diagnostic)}
 
     script = (
         "$ErrorActionPreference='Stop';"
@@ -1469,18 +1531,12 @@ def suppress_policy_blocked_structured_calls(
 def quarantine_policy_blocked_call(
     item: JsonObject, errors: list[str], tools: list[JsonObject], request_body: JsonObject
 ) -> JsonObject | None:
-    if item.get("name") != "shell":
-        return None
     diagnostic = None
     if any("external URL inspection already attempted" in error for error in errors):
-        if not request_requires_index_artifact(request_body):
-            return build_assistant_message(REPEATED_URL_ANSWER_DIAGNOSTIC)
         diagnostic = REPEATED_URL_INSPECTION_DIAGNOSTIC
-    elif any("artifact creation is pending" in error for error in errors):
-        diagnostic = ARTIFACT_FIRST_DIAGNOSTIC
     if diagnostic is None:
         return None
-    arguments = parse_function_call_arguments(item)
+    arguments = parse_function_call_arguments(item) if item.get("name") == "shell" else None
     call = diagnostic_tool_call(
         diagnostic,
         tools,
@@ -1489,7 +1545,7 @@ def quarantine_policy_blocked_call(
         shell_arguments=arguments,
     )
     if call is None:
-        return None
+        return build_assistant_message(diagnostic)
     return build_function_call_item(call)
 
 
@@ -1503,7 +1559,9 @@ def build_assistant_message(text: str) -> JsonObject:
     }
 
 
-def suppress_command_quality_blocked_structured_calls(response: JsonObject, tools: list[JsonObject]) -> list[JsonObject]:
+def suppress_command_quality_blocked_structured_calls(
+    response: JsonObject, tools: list[JsonObject]
+) -> list[JsonObject]:
     output = response.get("output")
     if not isinstance(output, list):
         return []
@@ -1591,6 +1649,13 @@ def has_visible_or_callable_output(output: list[Any]) -> bool:
     return False
 
 
+def has_callable_output(output: list[Any]) -> bool:
+    for item in output:
+        if isinstance(item, dict) and item.get("type") in ("function_call", "custom_tool_call"):
+            return True
+    return False
+
+
 def has_tool(tools: list[JsonObject], name: str) -> bool:
     return name in load_tool_specs(tools)
 
@@ -1606,9 +1671,19 @@ def diagnostic_tool_call(
         return ToolCall(
             name="shell",
             arguments={
-                **(shell_arguments or {}),
-                "command": ["powershell.exe", "-Command", "Write-Output " + powershell_quote(diagnostic)],
+                **diagnostic_shell_arguments(shell_arguments),
+                "command": diagnostic_shell_command(diagnostic),
             },
+            source=source,
+            span=(0, 0),
+            raw=raw,
+            valid=True,
+            errors=[],
+        )
+    if has_tool(tools, "update_plan"):
+        return ToolCall(
+            name="update_plan",
+            arguments=diagnostic_update_plan_arguments(diagnostic),
             source=source,
             span=(0, 0),
             raw=raw,
@@ -1618,9 +1693,39 @@ def diagnostic_tool_call(
     return None
 
 
+def diagnostic_update_plan_arguments(diagnostic: str) -> JsonObject:
+    return {
+        "explanation": "OpenGate diagnostic feedback.",
+        "plan": [
+            {"step": compact_one_line(diagnostic, 240), "status": "in_progress"},
+        ],
+    }
+
+
+def diagnostic_shell_arguments(shell_arguments: JsonObject | None) -> JsonObject:
+    if not shell_arguments:
+        return {}
+    return {
+        key: value
+        for key, value in shell_arguments.items()
+        if key in DIAGNOSTIC_SHELL_ARGUMENT_PASSTHROUGH and key != "command"
+    }
+
+
+def diagnostic_shell_command(diagnostic: str) -> list[str]:
+    message = base64.b64encode(diagnostic.encode("utf-8")).decode("ascii")
+    script = (
+        "$message=[System.Text.Encoding]::UTF8.GetString("
+        f"[System.Convert]::FromBase64String('{message}'));"
+        "Write-Output $message"
+    )
+    encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    return ["powershell.exe", "-NoProfile", "-EncodedCommand", encoded_script]
+
+
 ACTIONABLE_OUTPUT_DIAGNOSTIC = (
     "Open Gate detected a model response with reasoning only and no tool call or final message. "
-    "Continue with a direct valid structured tool call now; if creating a file, write the complete requested artifact."
+    "Continue with a direct valid structured tool call or a final answer."
 )
 
 
@@ -1672,8 +1777,6 @@ def policy_tool_call_errors(name: Any, arguments: JsonObject, request_body: Json
     errors: list[str] = []
     if name == "shell" and shell_arguments_contain_external_url(arguments) and has_prior_external_url_shell_call(request_body):
         errors.append("external URL inspection already attempted; proceed from the prompt instead of fetching again")
-    if name == "shell" and should_block_artifact_delay_shell_call(arguments, request_body):
-        errors.append("artifact creation is pending; write the requested index.html directly instead of inspecting")
     if name == "spawn_agent":
         if not has_explicit_subagent_intent(request_body):
             errors.append("spawn_agent requires an explicit user request for subagents, delegation, or parallel agent work")
@@ -1703,66 +1806,6 @@ def shell_arguments_contain_external_url(arguments: JsonObject) -> bool:
     return bool(re.search(r"https?://", text, re.IGNORECASE))
 
 
-def should_block_artifact_delay_shell_call(arguments: JsonObject, request_body: JsonObject) -> bool:
-    if not request_requires_index_artifact(request_body):
-        return False
-    if has_prior_artifact_write_call(request_body):
-        return False
-    if not has_prior_web_or_policy_failure(request_body):
-        return False
-    script = shell_script_text(arguments)
-    if not script:
-        return False
-    if re.search(r"\b(set-content|out-file|writealltext|appendalltext|new-item)\b", script, re.IGNORECASE):
-        return False
-    return bool(re.search(r"\b(get-childitem|dir|ls|test-path|get-content|measure-object)\b", script, re.IGNORECASE))
-
-
-def request_requires_index_artifact(request_body: JsonObject) -> bool:
-    text = all_user_text(request_body).lower()
-    return "index.html" in text and bool(re.search(r"\b(build|create|write|contained|single)\b", text))
-
-
-def has_prior_artifact_write_call(request_body: JsonObject) -> bool:
-    input_items = request_body.get("input")
-    if not isinstance(input_items, list):
-        return False
-    for item in input_items:
-        if not isinstance(item, dict) or item.get("type") not in {"function_call", "custom_tool_call"}:
-            continue
-        if item.get("name") != "shell":
-            continue
-        script = shell_script_text(parse_function_call_arguments(item))
-        if "index.html" in script.lower() and re.search(
-            r"\b(set-content|out-file|writealltext|appendalltext)\b", script, re.IGNORECASE
-        ):
-            return True
-    return False
-
-
-def has_prior_web_or_policy_failure(request_body: JsonObject) -> bool:
-    input_items = request_body.get("input")
-    if not isinstance(input_items, list):
-        return False
-    for item in input_items:
-        if not isinstance(item, dict):
-            continue
-        text = flatten_input_item(item).lower()
-        if any(
-            marker in text
-            for marker in (
-                "open gate blocked",
-                "unable to connect",
-                "remote server",
-                "do not retry",
-                "web_fetch",
-                "external url inspection",
-            )
-        ):
-            return True
-    return False
-
-
 def shell_script_text(arguments: JsonObject) -> str:
     command = arguments.get("command")
     if isinstance(command, str):
@@ -1782,7 +1825,9 @@ def blocking_command_quality_errors(call: ToolCall) -> list[str]:
     return errors
 
 
-def quarantine_command_quality_tool_call(call: ToolCall, tools: list[JsonObject]) -> tuple[ToolCall, JsonObject | None]:
+def quarantine_command_quality_tool_call(
+    call: ToolCall, tools: list[JsonObject]
+) -> tuple[ToolCall, JsonObject | None]:
     if call.name != "shell":
         return call, None
     issues = command_quality_error_issues(call)
@@ -1817,7 +1862,7 @@ def command_quality_diagnostic_text(issue_names: list[str]) -> str:
     if "unbounded_web_fetch" in issue_names or "powershell_curl_unix_flags" in issue_names:
         return (
             f"Open Gate blocked an invalid shell command ({issue_text}). "
-            "Do not retry that route; proceed from the prompt and create the requested artifact directly."
+            "Do not retry that route; continue from available context or use one smaller direct action."
         )
     return (
         f"Open Gate blocked an invalid shell command ({issue_text}). "

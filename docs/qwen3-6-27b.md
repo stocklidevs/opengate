@@ -1,17 +1,17 @@
 # Qwen3.6-27B Compatibility
 
-This note prepares the OpenGate validation plan for `Qwen/Qwen3.6-27B`. It intentionally records setup and commands before live results, so the benchmark can start from a clean baseline once the vLLM server is ready.
+This note records the OpenGate validation status for `Qwen/Qwen3.6-27B`: setup, baseline commands, completed results, partial OpenGate repair data, and the reason live optimization is currently parked.
 
 ## Status
 
 - Model repository: `Qwen/Qwen3.6-27B`
 - Served model name: `Qwen3.6-27B`
 - Server: vLLM at `http://127.0.0.1:8001/v1`
-- OpenGate target version: `0.6.11`
+- OpenGate target version: `0.6.18`
 - OpenGate mode: `repair`
 - Upstream input mode: `auto`
 - Context policy: `spoon` for live Codex work; `full` and `spoon` both useful for synthetic comparison.
-- Validation status: direct basic smoke complete; direct serious exposed a protocol incompatibility; OpenGate repair/spoon partial validation completed before the external command timeout.
+- Validation status: direct basic smoke complete; direct serious exposed a protocol incompatibility; OpenGate repair/spoon partial validation completed before the external command timeout; live optimization is parked because the remaining failures are task-progress/runtime behavior rather than clean proxy repair.
 - Validation date: `2026-05-11` UTC, `2026-05-10` America/New_York.
 
 ## vLLM Setup
@@ -62,6 +62,7 @@ context_recent_items = 12
 instruction_policy = "auto"
 tool_schema_policy = "auto"
 stream_heartbeat_seconds = 2
+upstream_max_output_tokens = 4096
 ```
 
 Then launch:
@@ -72,11 +73,12 @@ opengate
 
 Expected startup behavior:
 
-- The banner reports OpenGate `0.6.9`.
+- The banner reports the current OpenGate version.
 - The listener is `http://127.0.0.1:8765/v1`.
 - The upstream base URL is `http://127.0.0.1:8001/v1`.
 - The model source is upstream autodetection.
 - The capability summary reports whether `developer`, `system`, and native tool-history inputs are accepted by the upstream server.
+- The upstream output-token cap is `4096` unless overridden; use `0` only for controlled benchmarks where timeouts are acceptable.
 - `/health` reports `model` as `Qwen3.6-27B` once vLLM is live.
 
 Codex can keep a stable model name in its OpenGate profile because OpenGate rewrites the upstream `model` field to the detected vLLM model. For example:
@@ -184,6 +186,26 @@ A live Codex run against Qwen3.6 generated a structured shell call to inspect `h
 ## 2026-05-11 Hosted Web Search Routing
 
 Codex advertises live web search as a hosted Responses tool (`{"type":"web_search"}`), but Codex CLI does not execute a returned local `function_call` named `web_search`. A live smoke run reproduced that as `unsupported call: web_search`. OpenGate `0.6.11` now treats model-returned `web_search` as a hosted-tool alias and converts URL lookups into bounded `shell` metadata fetches. If the shell cannot reach the site, repeated non-artifact URL attempts end with a terminal assistant message instead of looping through diagnostic shell calls.
+
+## 2026-05-11 Executable-Only Shell Calls
+
+A later live run showed Qwen3.6 emitting a `shell` call whose `command` was only `powershell.exe`, while useful-looking content leaked into approval metadata such as `prefix_rule`, `sandbox_permissions`, and `justification`. OpenGate `0.6.12` treats that as `executable_only_command`, quarantines it into a safe generic diagnostic shell result, and strips approval metadata from the diagnostic.
+
+## 2026-05-11 Plan Detour And Timeout
+
+Another live run got valid Refero metadata, blocked repeated web inspection correctly, then Qwen3.6 spent a full turn on `update_plan` and timed out on the following artifact-generation turn. OpenGate temporarily experimented with blocking those plan detours, but that behavior is task supervision rather than proxy repair and is no longer part of the default path.
+
+## 2026-05-12 Requested-File Artifact Pressure
+
+The initial artifact-pressure fix was intentionally validated on the Refero `index.html` task, then generalized to other files such as `main.cpp`. That generalization still crossed the architectural line: it inferred task progress from prompts and tool outputs. OpenGate `0.6.17` removes that default behavior.
+
+## 2026-05-12 Failed Write State
+
+The latest Qwen3.6 Refero run exposed a malformed file-write shape: `Set-Content ... -Value @```ENDOFHTML``@`, which PowerShell rejected with `ParserError: Unrecognized token`. OpenGate keeps the generic part of that fix, quarantining malformed here-string placeholders before Codex executes them. It no longer tracks whether the artifact is pending or completed.
+
+## 2026-05-12 Scope Reset
+
+The Qwen3.6 live Refero runs proved that the remaining problems are broader than malformed tool calls: long stalls, planning loops, wrong tool choice, and task-progress drift. OpenGate `0.6.17` removes the default artifact-pressure/task-steering path added while chasing those runs. The proxy keeps generic protocol adaptation, tool-call repair, command-quality quarantine, bounded web metadata routing, captures, and benchmarks. Qwen3.6 should remain a benchmark target rather than an optimization target until a failure clearly belongs to the proxy layer.
 
 ## Acceptance Criteria
 

@@ -17,6 +17,7 @@ param(
     [ValidateSet("auto", "off")]
     [string]$CapabilityProbe = "auto",
     [double]$CapabilityProbeTimeout = 8,
+    [double]$UpstreamTimeoutSeconds = 420,
     [ValidateSet("read-only", "workspace-write", "danger-full-access")]
     [string]$Sandbox = "read-only",
     [switch]$FailOnPromptSandboxMismatch,
@@ -82,6 +83,7 @@ if ($DryRun) {
         tool_schema_policy = $ToolSchemaPolicy
         capability_probe = $CapabilityProbe
         capability_probe_timeout = $CapabilityProbeTimeout
+        upstream_timeout_seconds = $UpstreamTimeoutSeconds
         sandbox = $Sandbox
         fail_on_prompt_sandbox_mismatch = [bool]$FailOnPromptSandboxMismatch
         case_timeout_seconds = $CaseTimeoutSeconds
@@ -113,6 +115,7 @@ $manifest = [ordered]@{
     tool_schema_policy = $ToolSchemaPolicy
     capability_probe = $CapabilityProbe
     capability_probe_timeout = $CapabilityProbeTimeout
+    upstream_timeout_seconds = $UpstreamTimeoutSeconds
     sandbox = $Sandbox
     fail_on_prompt_sandbox_mismatch = [bool]$FailOnPromptSandboxMismatch
     case_timeout_seconds = $CaseTimeoutSeconds
@@ -126,7 +129,7 @@ $manifest = [ordered]@{
 }
 
 $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds, $UpstreamTimeout)
     Set-Location -LiteralPath $RootPath
     python -m open_gate `
         --host 127.0.0.1 `
@@ -142,8 +145,9 @@ $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
         --tool-schema-policy $SchemaPolicy `
         --capability-probe $CapabilityProbeMode `
         --capability-probe-timeout $CapabilityProbeSeconds `
+        --upstream-timeout $UpstreamTimeout `
         --quiet
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout, $UpstreamTimeoutSeconds
 
 try {
     $health = $null

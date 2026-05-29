@@ -1,0 +1,15 @@
+{
+  "name": "codex_live_refero_art_page",
+  "description": "Live Codex suite that asks a local model behind OpenGate to build the Refero-inspired single-file art page.",
+  "cases": [
+    {
+      "id": "refero_cosmic_page",
+      "category": "software_build_web",
+      "cwd": "refero-cosmic-page",
+      "expected_tools": [
+        "shell"
+      ],
+      "prompt": "Can you look at this site and refer to it for the next task: https://styles.refero.design/\n\n      Goal:\n      Build an immersive, visually striking, interactive webpage with a strong artistic direction. Choose one theme\n  only:\n      surreal forest, cosmic dreamscape, underwater bioluminescence, or abstract geometric ritual.\n      - Everything must be contained in index.html.\n      - No frameworks.\n      - The page must feel polished and intentional, not like a template.\n      - Include subtle motion, depth, glow, and atmosphere.\n      - Add at least one interactive element driven by mouse movement or clicks.\n      - Make it responsive and smooth on desktop.\n      - Keep performance reasonable."
+    }
+  ]
+}

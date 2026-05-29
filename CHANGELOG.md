@@ -8,6 +8,55 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.6.18 - 2026-05-29
+
+- Added the DeepSeek-Coder-V2-Lite adaptation results: direct baseline, OpenGate repair scores, live smoke evidence, and a cross-model scorecard entry that parks the model as behavior-limited rather than known-good.
+- Fixed request-diet compaction for Codex MCP namespace tools by preserving nested child tool schemas, removing the live vLLM HTTP 400 namespace blocker.
+- Extended command-quality repair for bare PowerShell aliases such as `dir`, wrapping them through `powershell.exe -Command ...` so Windows Codex runs do not try to execute aliases as standalone programs.
+- Kept Qwen3.6 parked as a benchmark target and removed Qwen3.6-specific runtime/test regression paths that crossed into task-progress steering.
+
+## 0.6.17 - 2026-05-12
+
+- Removed the default Qwen3.6 artifact-pressure/task-steering path: OpenGate no longer blocks `update_plan` because an artifact appears pending, no longer injects "write the complete file now" pressure into spoon context, and no longer tracks artifact completion state.
+- Changed OpenGate diagnostics to prefer safe `shell` observations before `update_plan`, so proxy feedback does not appear as model-authored plan updates when shell is available.
+- Stopped inferring file writes from raw artifact-looking shell strings plus a requested prompt target; OpenGate now keeps default repair focused on explicit command-shape fixes.
+- Kept generic command-quality protections such as executable-only shell detection, malformed here-string quarantine, empty artifact-write quarantine, bounded web metadata routing, protocol adaptation, request diet, and captures.
+
+## 0.6.16 - 2026-05-12
+
+- Added `upstream_max_output_tokens` config/CLI support, defaulting to `4096`, so local models cannot spend an entire turn generating oversized artifacts before timing out.
+- Added compact artifact-size guidance to artifact recovery diagnostics, keeping requested files target-agnostic while discouraging huge single-turn generations.
+- Changed OpenGate-generated diagnostic feedback to prefer `update_plan` when Codex advertises it, avoiding no-op diagnostic shell calls that can stall before the model receives feedback.
+- Kept a quote-safe fallback for shell-only sessions by emitting PowerShell `-EncodedCommand` diagnostics with base64-carried messages.
+- Made hosted `web_search` routing artifact-aware: URL lookups still become bounded shell metadata fetches for research-only turns, but artifact-building turns get an `update_plan` diagnostic telling the model to stop fetching and write the requested file.
+- Updated regression replay to decode encoded OpenGate diagnostic commands when checking expected output fragments.
+
+## 0.6.15 - 2026-05-12
+
+- Fixed artifact state tracking so an attempted write only clears artifact pressure after the matching tool output succeeds; failed writes such as PowerShell parser errors keep the requested artifact pending.
+- Prioritized artifact-progress recovery before the generic "reasoning only" recovery, so reasoning-only turns after artifact failures get file-specific guidance.
+- Added command-quality detection for malformed PowerShell here-string/file-content placeholders such as `-Value @```ENDOFHTML``@`, quarantining them before Codex executes the bad command.
+- Added regression coverage for Qwen3.6's latest Refero/index.html failure: reasoning-only recovery, malformed file-write quarantine, and failed-write pending state.
+
+## 0.6.14 - 2026-05-12
+
+- Generalized artifact-pressure and recovery diagnostics from `index.html` to the requested target file, so tasks like `main.cpp`, `app.py`, or `README.md` get file-specific guidance.
+- Added artifact target detection for common source-code extensions, including C, C++, C#, Go, Java, Kotlin, Rust, shell, SQL, Swift, and related header/script files.
+- Added regression coverage proving plan-blocking, prose-only recovery, spoon constraints, and executable-only shell recovery use `main.cpp` without leaking `index.html`-specific instructions.
+
+## 0.6.13 - 2026-05-11
+
+- Added artifact-pressure constraints in spoon mode after exhausted web/research attempts, telling the model to stop planning and write the requested `index.html` directly.
+- Quarantined non-productive `update_plan` calls when artifact creation is pending after a prior OpenGate web/policy diagnostic.
+- Added regression coverage for the Qwen3.6 failure where the model updated the plan after metadata was already available, then timed out on the next artifact turn.
+
+## 0.6.12 - 2026-05-11
+
+- Added `executable_only_command` command-quality detection for shell calls that only invoke `powershell.exe`, `pwsh`, or `cmd` without a real script.
+- Made command-quality quarantines strip approval metadata such as `prefix_rule`, `sandbox_permissions`, and `justification` from safe diagnostic shell calls.
+- Added artifact-aware command-quality recovery text that tells the model to write the complete `index.html` in one valid shell command after malformed artifact-write attempts.
+- Updated tool guardrails so upstream models are explicitly told not to put approval metadata inside shell commands.
+
 ## 0.6.11 - 2026-05-11
 
 - Added schema-aware handling for Codex's hosted `web_search` tool shape, including type-only tool specs such as `{"type":"web_search"}`.

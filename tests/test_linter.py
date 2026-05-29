@@ -106,6 +106,92 @@ class LinterTests(unittest.TestCase):
         self.assertTrue(report.tool_calls[0].valid)
         self.assertEqual(report.cleaned_text, "")
 
+    def test_deepseek_v3_delimited_tool_call_is_extracted_and_cleaned(self) -> None:
+        tools = [
+            {
+                "type": "function",
+                "name": "shell",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "array", "items": {"type": "string"}},
+                        "workdir": {"type": "string"},
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        report = analyze_text(
+            '<\uff5ctool\u2581call\u2581begin\uff5c>function<\uff5ctool\u2581sep\uff5c>shell\n'
+            "```json\n"
+            '{"command": ["powershell.exe", "-Command", "Get-ChildItem -Force"], "workdir": "C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}\n'
+            "```"
+            '<\uff5ctool\u2581call\u2581end\uff5c><\uff5ctool\u2581calls\u2581end\uff5c>\n'
+            '<\uff5ctool\u2581outputs\u2581begin\uff5c><\uff5ctool\u2581output\u2581begin\uff5c>{"output":"Directory"}'
+            '<\uff5ctool\u2581output\u2581end\uff5c><\uff5ctool\u2581outputs\u2581end\uff5c>\n'
+            "The directory contains files.",
+            tools,
+        )
+
+        self.assertEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "shell")
+        self.assertEqual(report.tool_calls[0].source, "deepseek_v3_tool_call")
+        self.assertEqual(report.tool_calls[0].arguments["command"], ["powershell.exe", "-Command", "Get-ChildItem -Force"])
+        self.assertTrue(report.tool_calls[0].valid)
+        self.assertEqual(report.cleaned_text, "The directory contains files.")
+        self.assertIn("parsed_tool_call", report.leaks)
+        self.assertIn("deepseek_v3_tool_marker", report.leaks)
+
+    def test_deepseek_v3_partial_markers_are_stripped_without_promotion(self) -> None:
+        report = analyze_text(
+            "```json\n"
+            '{"command": ["powershell.exe", "-Command", "Get-Location"], "workdir": "C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}\n'
+            "```"
+            '<\uff5ctool\u2581call\u2581end\uff5c><\uff5ctool\u2581calls\u2581end\uff5c>\n'
+            '<\uff5ctool\u2581outputs\u2581begin\uff5c><\uff5ctool\u2581output\u2581begin\uff5c>{"output":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}'
+            '<\uff5ctool\u2581output\u2581end\uff5c><\uff5ctool\u2581outputs\u2581end\uff5c>\n'
+            'The current working directory is "C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test".',
+            TOOLS,
+        )
+
+        self.assertEqual(report.tool_calls, [])
+        self.assertNotIn("\u2581", report.cleaned_text)
+        self.assertNotIn('"command"', report.cleaned_text)
+        self.assertEqual(report.cleaned_text, 'The current working directory is "C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test".')
+        self.assertIn("deepseek_v3_tool_marker", report.leaks)
+
+    def test_json_tool_calls_function_parameters_become_arguments(self) -> None:
+        tools = [
+            {
+                "type": "function",
+                "name": "shell",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "array", "items": {"type": "string"}},
+                        "workdir": {"type": "string"},
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        report = analyze_text(
+            "```json\n"
+            '{"tool_calls":[{"id":"tool_1","type":"function","function":{"name":"shell","parameters":{"command":["powershell.exe","-Command","Get-Content forest-scene.html -TotalCount 1"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}}}]}\n'
+            "```",
+            tools,
+        )
+
+        self.assertEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "shell")
+        self.assertEqual(
+            report.tool_calls[0].arguments["command"],
+            ["powershell.exe", "-Command", "Get-Content forest-scene.html -TotalCount 1"],
+        )
+        self.assertTrue(report.tool_calls[0].valid)
+
     def test_type_only_hosted_tool_is_available(self) -> None:
         tools = [{"type": "web_search"}]
 
@@ -217,6 +303,14 @@ Done.""",
         self.assertNotIn("<tool_call>", report.cleaned_text)
         self.assertIn("Here is an example:", report.cleaned_text)
         self.assertIn("Done.", report.cleaned_text)
+
+    def test_residual_tool_call_tag_text_is_neutralized(self) -> None:
+        report = analyze_text("The exact <tool_call> XML would go here.", TOOLS)
+
+        self.assertEqual(report.tool_calls, [])
+        self.assertNotIn("<tool_call>", report.cleaned_text)
+        self.assertIn("tool call", report.cleaned_text)
+        self.assertIn("tool_call_tag", report.leaks)
 
     def test_residual_recipient_syntax_is_neutralized(self) -> None:
         report = analyze_text("Use recipient_name=functions.shell or the recipient_name field.", TOOLS)

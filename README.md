@@ -8,7 +8,7 @@
   <strong>Make local open coding models behave inside Codex CLI.</strong>
 </p>
 
-![Version](https://img.shields.io/badge/version-0.6.11-blue)
+![Version](https://img.shields.io/badge/version-0.6.18-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![API](https://img.shields.io/badge/API-Responses-111827)
 ![Proxy Modes](https://img.shields.io/badge/proxy-repair%20%7C%20observe-16A34A)
@@ -17,7 +17,7 @@
 
 Open Gate is a local harness and proxy for making open coding models behave like a Responses API agent backend for Codex. It captures real Codex traffic, detects tool-call leakage, repairs common open-model tool-call failures, and produces repeatable baseline reports that other home-lab users can compare.
 
-Current release: `0.6.11`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
+Current release: `0.6.18`. See `CHANGELOG.md` for release notes and `docs\release-process.md` for versioning.
 
 ## Current Shape
 
@@ -30,14 +30,19 @@ Current release: `0.6.11`. See `CHANGELOG.md` for release notes and `docs\releas
 - Proxy mode supports `--normalization-mode repair` and `--normalization-mode observe`.
 - Proxy mode defaults to `--upstream-input-mode auto`, which flattens multi-turn Codex Responses history or unsupported instruction roles when vLLM cannot accept the native shape.
 - Proxy mode supports `--context-policy spoon`, which compacts older Codex history, keeps recent turns exact, and carries forward concise constraints from prior tool failures.
+- Command quality catches malformed PowerShell file-content syntax such as placeholder here-string markers before Codex executes the bad command.
+- Proxy mode defaults to `--upstream-max-output-tokens 4096`, preventing a single local-model turn from growing into a giant artifact generation that times out before Codex sees a tool call.
+- OpenGate keeps its default scope to protocol adaptation, tool-call repair, command-quality quarantine, captures, and reporting; it does not try to manage task progress.
+- OpenGate-generated diagnostics prefer a safe `shell` observation when shell is available, so they do not show up as model-authored `update_plan` items.
 - Proxy mode injects compact tool-discipline guardrails before upstream generation, including the exact callable tool list and explicit warnings against invented or unavailable aliases such as `browser`, `write_file`, and `apply_patch`.
 - Proxy mode quarantines structured shell calls with command-quality errors into safe diagnostic shell calls, so Codex receives actionable tool feedback instead of only assistant prose.
-- Proxy mode treats Codex `web_search` as a hosted tool, not a local Codex function, and converts model-returned `web_search` URL lookups into bounded shell metadata fetches.
+- Proxy mode blocks shell calls that only invoke `powershell.exe`, `pwsh`, or `cmd` without a real script, and strips approval metadata from diagnostic shell quarantines.
+- Proxy mode treats Codex `web_search` as a hosted tool, not a local Codex function. It converts model-returned URL lookups into bounded shell metadata fetches when `shell` is available.
 - Proxy mode defaults to request-diet `auto` policies, digesting oversized Codex instructions and compacting oversized tool schemas before forwarding to vLLM.
 - Streamed proxy requests emit real Responses lifecycle/heartbeat events while waiting for vLLM, then replay the normalized response as Responses SSE events.
 - Every request is written to `captures/` with sensitive headers redacted.
-- `open_gate.linter` extracts leaked tool calls from XML tags, GLM `<arg_key>/<arg_value>` tags, bare `recipient_name=functions.*` headers, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
-- `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex, including empty artifact writes, bare PowerShell cmdlets, split PowerShell `-Command` arrays, nested PowerShell, Windows PowerShell `&&`, bad here-strings, bare here-string file writes, malformed JSON-array PowerShell scripts, fragile Python one-liners, full-page web fetches, and non-image `view_image` paths.
+- `open_gate.linter` extracts leaked tool calls from XML tags, GLM `<arg_key>/<arg_value>` tags, DeepSeek/vLLM delimiter blocks, bare `recipient_name=functions.*` headers, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
+- `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex, including executable-only shell calls, empty artifact writes, bare PowerShell cmdlets or aliases, split PowerShell `-Command` arrays, nested PowerShell, Windows PowerShell `&&`, bad here-strings, bare here-string file writes, malformed JSON-array PowerShell scripts, fragile Python one-liners, full-page web fetches, and non-image `view_image` paths.
 - `open_gate.regression` replays captured upstream responses through normalization as stable fixtures.
 - `open_gate.adversarial` fuzzes malformed GLM-style tag whitespace through the full proxy normalizer to catch leakage slips before live Codex runs.
 - `open_gate.codex_report` summarizes live Codex JSONL output and proxy captures.
@@ -93,13 +98,14 @@ python -m open_gate `
   --context-policy spoon `
   --context-max-chars 60000 `
   --context-recent-items 10 `
+  --upstream-max-output-tokens 4096 `
   --instruction-policy auto `
   --tool-schema-policy auto
 ```
 
 See `docs\context-policy.md` for the spoon-feed compiler and its capture metrics. See `docs\upstream-capabilities.md` for capability probing and protocol adaptation.
 
-Use `--upstream-timeout` to give slower local models enough time for large code-generation turns. The CLI default is `420` seconds. Use `--stream-heartbeat-seconds` to tune Responses heartbeat events for streamed Codex requests. The default is `2.0`, which keeps Codex from seeing a silent socket while Qwen/GLM/vLLM spends a minute or more producing a large tool call.
+Use `--upstream-timeout` to give slower local models enough time for large code-generation turns. The CLI default is `420` seconds. Use `--upstream-max-output-tokens` to cap one upstream generation; the default is `4096`, and `0` disables the cap. Use `--stream-heartbeat-seconds` to tune Responses heartbeat events for streamed Codex requests. The default is `2.0`, which keeps Codex from seeing a silent socket while Qwen/GLM/vLLM spends a minute or more producing a large tool call.
 
 Config precedence is:
 
@@ -158,11 +164,11 @@ python -m open_gate.inspect_capture --pretty
 python -m open_gate.lint fixtures\leaks\qwen_xml_tool_call.txt --tools fixtures\tools\codex_like_tools.json --pretty
 ```
 
-The lint output includes `command_quality_issues` for tool calls that are syntactically structured but operationally suspicious. This catches failures like `cd glm-test && ...` under Windows PowerShell, full-page `Invoke-WebRequest` HTML dumps, `uv run playwright ...` before Playwright is installed, or `view_image` pointed at a directory. See `docs\tool-call-linter.md`.
+The lint output includes `command_quality_issues` for tool calls that are syntactically structured but operationally suspicious. This catches failures like `cd glm-test && ...` under Windows PowerShell, bare PowerShell cmdlets or aliases used as executables, full-page `Invoke-WebRequest` HTML dumps, `uv run playwright ...` before Playwright is installed, or `view_image` pointed at a directory. See `docs\tool-call-linter.md`.
 
 ## Benchmark Tool Calls
 
-The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. The first GLM baseline used `zai-org/GLM-4.7-Flash` as `GLM-4.7-Flash`. Qwen3.6-27B setup and pending benchmark commands are prepared in `docs\qwen3-6-27b.md`. Full setup notes are in `docs\vllm-notes.md`.
+The Qwen baseline used vLLM serving `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` as `Qwen3-Coder-Next`. The first GLM baseline used `zai-org/GLM-4.7-Flash` as `GLM-4.7-Flash`. Qwen3.6-27B setup, partial validation, and parked-status notes are recorded in `docs\qwen3-6-27b.md`. DeepSeek-Coder-V2-Lite setup, synthetic repair status, and live behavior-limited status are recorded in `docs\deepseek-coder-v2-lite.md`. Full setup notes are in `docs\vllm-notes.md`.
 
 Run a raw baseline against the GX10 vLLM server:
 
@@ -190,13 +196,13 @@ powershell.exe -ExecutionPolicy Bypass -File C:\Users\example\source\repos\open-
 
 The proxy benchmark runner starts a fresh local Open Gate process, verifies `/health` metadata for the requested model and context policy, refuses to reuse an occupied port, and stores captures under `runs\<label>\captures`.
 
-Direct Qwen scored `43/60` strict successes on the serious suite. The first Open Gate proxy baseline scored `60/60` on the same suite. Direct GLM-4.7-Flash scored `2/20` strict successes on the first serious baseline and leaked tool syntax in `18/20` cases. Open Gate `0.6.0` repairs that GLM dialect: `repair/full` scored `20/20`, and `repair/spoon` scored `19/20` with zero leaks. See `docs\benchmark-notes.md`.
+Direct Qwen scored `43/60` strict successes on the serious suite. The first Open Gate proxy baseline scored `60/60` on the same suite. Direct GLM-4.7-Flash scored `2/20` strict successes on the first serious baseline and leaked tool syntax in `18/20` cases. Open Gate `0.6.0` repairs that GLM dialect: `repair/full` scored `20/20`, and `repair/spoon` scored `19/20` with zero leaks. Direct DeepSeek-Coder-V2-Lite scored `9/60`; after the accepted parser/schema repairs, OpenGate `repair/full` scored `48/60` and `repair/spoon` scored `17/20`, both with zero returned leaks and zero invalid calls. The DeepSeek live namespace-tool protocol blocker is now repaired, but live status remains behavior-limited because no-tool/documentation answers still show DeepSeek chat-template preamble text. See `docs\benchmark-notes.md`.
 
 For interactive Codex usage, see `docs\interactive-codex.md`.
 
 The key summary fields are `strict_successes_rate`, `leaks_rate`, `argument_leaks_rate`, `proxy_recoverable_rate`, `missed_tool_calls_rate`, and `invalid_tool_calls_rate`. A leaked but parseable tool call is counted as a failure for the raw backend and as `proxy_recoverable`, which is the number Open Gate should drive toward a structured success.
 
-`command_quality_issues_rate` is stricter than basic tool-call validity. It catches structured commands that are likely to fail inside Codex even though they parse as valid JSON, such as empty target artifact writes, bare PowerShell cmdlets (`Write-Host` as the executable), split `powershell.exe -Command` arrays, nested PowerShell, Windows PowerShell `&&`, malformed here-strings, full-page web fetches, and brittle `python -c` compound statements.
+`command_quality_issues_rate` is stricter than basic tool-call validity. It catches structured commands that are likely to fail inside Codex even though they parse as valid JSON, such as executable-only shell calls, empty target artifact writes, bare PowerShell cmdlets or aliases (`Write-Host` or `dir` as the executable), split `powershell.exe -Command` arrays, nested PowerShell, Windows PowerShell `&&`, malformed here-strings, full-page web fetches, and brittle `python -c` compound statements.
 
 Probe request-size behavior without generation:
 
@@ -244,7 +250,7 @@ Summarise an existing live run:
 python -m open_gate.codex_report runs\codex-live\<run-id>\captures --codex-dir runs\codex-live\<run-id> --pretty --summary-only
 ```
 
-Live benchmark details are in `docs\live-codex-benchmark.md`. The first known-good Qwen compatibility note is in `docs\qwen3-coder-next.md`, Qwen3.6-27B preparation notes are in `docs\qwen3-6-27b.md`, and the repeatable process for the next model is in `docs\model-adaptation-checklist.md`.
+Live benchmark details are in `docs\live-codex-benchmark.md`. The first known-good Qwen compatibility note is in `docs\qwen3-coder-next.md`, Qwen3.6-27B preparation notes are in `docs\qwen3-6-27b.md`, DeepSeek-Coder-V2-Lite synthetic repair and live behavior-limited notes are in `docs\deepseek-coder-v2-lite.md`, and the repeatable process for the next model is in `docs\model-adaptation-checklist.md`.
 
 Latest local smoke result:
 
@@ -290,8 +296,8 @@ The first Codex capture showed `POST /v1/responses` with `stream: true`, three i
 
 ## Versioning
 
-Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.6.11`.
+Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.6.18`.
 
 ## Next Milestone
 
-The next step is to validate Qwen3.6-27B with the same process: direct baseline, OpenGate repair benchmark, live Codex software-build run, then add only model-agnostic recovery rules when captures prove a repeatable failure shape.
+Qwen3.6-27B remains recorded as a benchmark target, but it is not the next OpenGate optimization target. DeepSeek-Coder-V2-Lite synthetic parser/schema repair is implemented and the live namespace-tool protocol gap is repaired; the remaining DeepSeek work is behavior-limited live validation, especially no-tool/documentation answer quality.

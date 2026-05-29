@@ -21,7 +21,7 @@ class ConfigTests(unittest.TestCase):
                     "capability_probe": "off",
                     "capability_probe_timeout": 3,
                 },
-                "proxy": {"context_policy": "spoon"},
+                "proxy": {"context_policy": "spoon", "upstream_max_output_tokens": 3072},
             }
         )
 
@@ -31,6 +31,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config["capability_probe"], "off")
         self.assertEqual(config["capability_probe_timeout"], 3)
         self.assertEqual(config["context_policy"], "spoon")
+        self.assertEqual(config["upstream_max_output_tokens"], 3072)
 
     def test_cli_values_override_config_values(self) -> None:
         merged = merge_config(

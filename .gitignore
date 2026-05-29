@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.venv/
+venv/
+dist/
+*.egg-info/
+.env*
 .codex-test/
 captures/*.json
 logs/*.log

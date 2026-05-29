@@ -80,10 +80,59 @@ class CommandQualityTests(unittest.TestCase):
         self.assertIn("direct_powershell_cmdlet", {issue["issue"] for issue in issues})
         self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "Write-Host loading"])
 
+    def test_repairs_direct_powershell_alias_arguments(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": ["dir"]},
+            source="deepseek_v3_tool_call",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments(call.arguments)
+
+        self.assertIn("direct_powershell_cmdlet", {issue["issue"] for issue in issues})
+        self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "dir"])
+
     def test_leaves_clean_command_array_alone(self) -> None:
         repaired = repair_shell_command_argument(["powershell.exe", "-Command", "Get-ChildItem -Force"])
 
         self.assertIsNone(repaired)
+
+    def test_detects_executable_only_shell_command(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": ["powershell.exe", "-Command", "powershell.exe"],
+                "justification": "Fetch reference site metadata",
+                "prefix_rule": ["powershell.exe", "-Command", "(Invoke-Web"],
+                "sandbox_permissions": "require_escalated",
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertEqual(issues[0]["issue"], "executable_only_command")
+        self.assertEqual(issues[0]["severity"], "error")
+        self.assertEqual(issues[0]["metadata_keys"], ["justification", "prefix_rule", "sandbox_permissions"])
+
+    def test_detects_string_command_that_is_only_shell_executable(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": "powershell.exe"},
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("string_command", {issue["issue"] for issue in issues})
+        self.assertIn("executable_only_command", {issue["issue"] for issue in issues})
 
     def test_repairs_json_array_encoded_powershell_command(self) -> None:
         repaired = repair_shell_command_argument(
@@ -154,6 +203,44 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertNotIn("windows_powershell_chain_operator", {issue["issue"] for issue in issues})
 
+    def test_ignores_javascript_chain_operator_inside_quoted_artifact_string(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Set-Content -Path index.html -Value '<script>if (active && ready) run();</script>'",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertNotIn("windows_powershell_chain_operator", {issue["issue"] for issue in issues})
+
+    def test_still_detects_chain_operator_outside_powershell_strings(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Write-Output 'safe && text'; cd glm-test && uv run python -c \"print(1)\"",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("windows_powershell_chain_operator", {issue["issue"] for issue in issues})
+
     def test_detects_powershell_here_string_escape_misuse(self) -> None:
         call = ToolCall(
             name="shell",
@@ -166,6 +253,25 @@ class CommandQualityTests(unittest.TestCase):
         issues = inspect_tool_calls([call])
 
         self.assertEqual(issues[0]["issue"], "powershell_here_string_header")
+
+    def test_detects_malformed_powershell_here_string_placeholder(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Set-Content -LiteralPath 'index.html' -Value @```ENDOFHTML``@ -Encoding UTF8",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("malformed_powershell_here_string", {issue["issue"] for issue in issues})
 
     def test_repairs_bad_powershell_here_string_header(self) -> None:
         repaired = repair_shell_arguments(

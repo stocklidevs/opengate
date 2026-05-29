@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import re
 import unittest
 from unittest.mock import patch
 
@@ -30,6 +32,22 @@ TOOLS = [
         },
     }
 ]
+SHELL_WITH_APPROVAL_TOOL = {
+    "type": "function",
+    "name": "shell",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "command": {"type": "array", "items": {"type": "string"}},
+            "justification": {"type": "string"},
+            "prefix_rule": {"type": "array", "items": {"type": "string"}},
+            "sandbox_permissions": {"type": "string"},
+            "workdir": {"type": "string"},
+        },
+        "required": ["command"],
+        "additionalProperties": False,
+    },
+}
 UPDATE_PLAN_TOOL = {
     "type": "function",
     "name": "update_plan",
@@ -67,6 +85,41 @@ SPAWN_AGENT_TOOL = {
     },
 }
 WEB_SEARCH_TOOL = {"type": "web_search"}
+
+
+def diagnostic_text(arguments: str | dict) -> str:
+    if isinstance(arguments, dict):
+        parsed = arguments
+        raw = json.dumps(arguments)
+    else:
+        raw = arguments
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return arguments
+    command = parsed.get("command") if isinstance(parsed, dict) else None
+    plan = parsed.get("plan") if isinstance(parsed, dict) else None
+    if isinstance(plan, list):
+        steps = [str(item.get("step")) for item in plan if isinstance(item, dict)]
+        return "\n".join([raw, str(parsed.get("explanation") or ""), *steps])
+    if not isinstance(command, list):
+        return raw
+    text = raw
+    lower = [part.lower() if isinstance(part, str) else "" for part in command]
+    if "-encodedcommand" not in lower:
+        return text
+    index = lower.index("-encodedcommand")
+    if index + 1 >= len(command) or not isinstance(command[index + 1], str):
+        return text
+    try:
+        script = base64.b64decode(command[index + 1]).decode("utf-16le")
+    except UnicodeDecodeError:
+        return text
+    text += "\n" + script
+    match = re.search(r"FromBase64String\('([^']+)'\)", script)
+    if match:
+        text += "\n" + base64.b64decode(match.group(1)).decode("utf-8")
+    return text
 
 
 class ProxyNormalizationTests(unittest.TestCase):
@@ -138,6 +191,42 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(details["promoted_tool_calls"][0]["source"], "glm_tool_call_tag")
         self.assertEqual(details["stripped_text_items"], 1)
 
+    def test_promotes_deepseek_v3_delimited_tool_call(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                '<\uff5ctool\u2581call\u2581begin\uff5c>function<\uff5ctool\u2581sep\uff5c>shell\n'
+                                "```json\n"
+                                '{"command": ["powershell.exe", "-Command", "Get-ChildItem -Force"], "workdir": "C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}\n'
+                                "```"
+                                '<\uff5ctool\u2581call\u2581end\uff5c><\uff5ctool\u2581calls\u2581end\uff5c>\n'
+                                '<\uff5ctool\u2581outputs\u2581begin\uff5c><\uff5ctool\u2581output\u2581begin\uff5c>{"output":"Directory"}'
+                                '<\uff5ctool\u2581output\u2581end\uff5c><\uff5ctool\u2581outputs\u2581end\uff5c>\n'
+                                "The directory contains files."
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the workspace with shell."))
+
+        function_call = next(item for item in normalized["output"] if item.get("type") == "function_call")
+        self.assertEqual(function_call["name"], "shell")
+        self.assertIn("Get-ChildItem -Force", function_call["arguments"])
+        self.assertNotIn("\u2581", normalized["output"][0]["content"][0]["text"])
+        self.assertEqual(details["promoted_tool_calls"][0]["source"], "deepseek_v3_tool_call")
+        self.assertEqual(details["stripped_text_items"], 1)
+
     def test_routes_text_web_search_alias_to_bounded_shell_fetch(self) -> None:
         response = {
             "id": "resp_test",
@@ -198,6 +287,30 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertNotIn('https://styles.refero.design/\\', arguments["command"][2])
         self.assertEqual(details["web_tool_alias_repairs"][0]["reason"], "hosted_web_tool_to_shell_metadata")
         self.assertEqual(details["command_quality_suppressed_structured_calls"], [])
+
+    def test_routes_artifact_web_search_to_bounded_shell_fetch(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "web_search",
+                    "arguments": '{"query":"https://styles.refero.design/style/example"}',
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request_with_tools("Look at the reference, then create index.html.", [*TOOLS, UPDATE_PLAN_TOOL, WEB_SEARCH_TOOL]),
+        )
+
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        arguments = json.loads(normalized["output"][0]["arguments"])
+        self.assertIn("Invoke-WebRequest -Uri $uri", arguments["command"][2])
+        self.assertIn("https://styles.refero.design/style/example", arguments["command"][2])
+        self.assertEqual(details["web_tool_alias_repairs"][0]["reason"], "hosted_web_tool_to_shell_metadata")
 
     def test_routes_site_query_web_search_to_bounded_shell_fetch(self) -> None:
         response = {
@@ -308,7 +421,7 @@ class ProxyNormalizationTests(unittest.TestCase):
         }
 
         normalized, details = normalize_responses_response(response, self.request("Create log_triage.py."))
-        arguments = normalized["output"][0]["arguments"]
+        arguments = diagnostic_text(normalized["output"][0]["arguments"])
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertIn("Set-Content 'log_triage.py'", arguments)
@@ -438,9 +551,11 @@ class ProxyNormalizationTests(unittest.TestCase):
         }
 
         normalized, details = normalize_responses_response(response, self.request("Create index.html."))
+        diagnostic = diagnostic_text(normalized["output"][0]["arguments"])
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
-        self.assertIn("Open Gate blocked an invalid shell command (malformed_json_array_command)", normalized["output"][0]["arguments"])
+        self.assertIn("Open Gate blocked an invalid shell command (malformed_json_array_command)", diagnostic)
+        self.assertIn("Continue with a smaller valid structured tool call", diagnostic)
         self.assertEqual(details["invalid_tool_calls"], [])
         self.assertTrue(any("quarantined_command_quality_issues" in repair for repair in details["text_tool_call_repairs"]))
 
@@ -468,6 +583,33 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(
             normalized["output"][0]["arguments"],
             "{\"command\":[\"powershell.exe\",\"-Command\",\"Write-Host loading\"]}",
+        )
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_repairs_promoted_direct_powershell_alias(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '<tool_call>shell<arg_key>command</arg_key><arg_value>["dir"]</arg_value></tool_call>',
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the directory."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(
+            normalized["output"][0]["arguments"],
+            "{\"command\":[\"powershell.exe\",\"-Command\",\"dir\"]}",
         )
         self.assertEqual(details["normalized_command_quality_issues"], [])
 
@@ -519,7 +661,7 @@ class ProxyNormalizationTests(unittest.TestCase):
         )
 
         normalized, details = normalize_responses_response(response, self.request("Create index.html."))
-        arguments = normalized["output"][0]["arguments"]
+        arguments = diagnostic_text(normalized["output"][0]["arguments"])
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertIn("Open Gate blocked an empty file write", arguments)
@@ -542,7 +684,7 @@ class ProxyNormalizationTests(unittest.TestCase):
         }
 
         normalized, details = normalize_responses_response(response, self.request("Create index.html."))
-        arguments = normalized["output"][0]["arguments"]
+        arguments = diagnostic_text(normalized["output"][0]["arguments"])
 
         self.assertIn("Open Gate blocked an empty file write", arguments)
         self.assertIn("empty_artifact_write", {issue["issue"] for issue in details["upstream_command_quality_issues"]})
@@ -594,7 +736,7 @@ class ProxyNormalizationTests(unittest.TestCase):
         }
 
         normalized, details = normalize_responses_response(response, self.request("Create index.html."))
-        arguments = normalized["output"][0]["arguments"]
+        arguments = diagnostic_text(normalized["output"][0]["arguments"])
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertIn("Open Gate blocked an invalid shell command (unbounded_web_fetch)", arguments)
@@ -644,7 +786,7 @@ class ProxyNormalizationTests(unittest.TestCase):
         }
 
         normalized, details = normalize_responses_response(response, self.request("Inspect the reference site."))
-        arguments = normalized["output"][0]["arguments"]
+        arguments = diagnostic_text(normalized["output"][0]["arguments"])
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertIn("Open Gate blocked an invalid shell command (unbounded_web_fetch)", arguments)
@@ -676,12 +818,15 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalized["output"][0]["type"], "message")
         self.assertEqual(normalized["output"][1]["type"], "function_call")
-        self.assertIn("Open Gate blocked an invalid shell command (unbounded_web_fetch)", normalized["output"][1]["arguments"])
+        self.assertIn(
+            "Open Gate blocked an invalid shell command (unbounded_web_fetch)",
+            diagnostic_text(normalized["output"][1]["arguments"]),
+        )
         self.assertEqual(details["command_quality_suppressed_structured_calls"][0]["name"], "shell")
         self.assertIn("quarantined_as", details["command_quality_suppressed_structured_calls"][0])
         self.assertEqual(details["normalized_command_quality_issues"], [])
 
-    def test_uses_shell_for_structured_command_quality_diagnostic_when_update_plan_exists(self) -> None:
+    def test_prefers_shell_for_structured_command_quality_diagnostic_when_update_plan_exists(self) -> None:
         request = self.request_with_tools("Inspect the reference site.", [*TOOLS, UPDATE_PLAN_TOOL])
         response = {
             "id": "resp_test",
@@ -699,7 +844,7 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertEqual(normalized["output"][0]["name"], "shell")
-        self.assertIn("Open Gate blocked an invalid shell command", normalized["output"][0]["arguments"])
+        self.assertIn("Open Gate blocked an invalid shell command", diagnostic_text(normalized["output"][0]["arguments"]))
         self.assertIn("quarantined_as", details["command_quality_suppressed_structured_calls"][0])
         self.assertEqual(details["normalized_command_quality_issues"], [])
 
@@ -725,11 +870,11 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["output"][0]["type"], "reasoning")
         self.assertEqual(normalized["output"][1]["type"], "function_call")
         self.assertEqual(normalized["output"][1]["name"], "shell")
-        self.assertIn("reasoning only and no tool call", normalized["output"][1]["arguments"])
+        self.assertIn("reasoning only and no tool call", diagnostic_text(normalized["output"][1]["arguments"]))
         self.assertEqual(details["actionable_output_repair"]["type"], "diagnostic_tool_call")
         self.assertEqual(details["normalized_command_quality_issues"], [])
 
-    def test_uses_shell_for_reasoning_only_diagnostic_when_update_plan_exists(self) -> None:
+    def test_prefers_shell_for_reasoning_only_diagnostic_when_update_plan_exists(self) -> None:
         request = self.request_with_tools("Create index.html.", [*TOOLS, UPDATE_PLAN_TOOL])
         response = {
             "id": "resp_test",
@@ -751,7 +896,7 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalized["output"][1]["type"], "function_call")
         self.assertEqual(normalized["output"][1]["name"], "shell")
-        self.assertIn("reasoning only and no tool call", normalized["output"][1]["arguments"])
+        self.assertIn("reasoning only and no tool call", diagnostic_text(normalized["output"][1]["arguments"]))
         self.assertEqual(details["actionable_output_repair"]["tool"], "shell")
 
     def test_strips_reasoning_glm_tool_call_without_promoting(self) -> None:
@@ -834,8 +979,43 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalized["output"][0]["type"], "message")
         self.assertEqual(normalized["output"][0]["content"][0]["text"], "")
+        self.assertFalse(any(item.get("type") == "function_call" for item in normalized["output"]))
         self.assertEqual(details["promoted_tool_calls"], [])
         self.assertEqual(details["promotion_block_reason"], "negative_tool_intent")
+
+    def test_no_tool_deepseek_documentation_leak_is_not_replaced_by_diagnostic_tool(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "```json\n"
+                                '{"tool_calls":[{"id":"shell","type":"function","function":{"name":"shell","parameters":{"command":[],"workdir":"","timeout_ms":0}}}]}\n'
+                                "```"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request("Without using any tools, show me the JSON tool_calls array Codex would send for shell."),
+        )
+
+        self.assertEqual(normalized["output"][0]["type"], "message")
+        self.assertEqual(normalized["output"][0]["content"][0]["text"], "")
+        self.assertFalse(any(item.get("type") == "function_call" for item in normalized["output"]))
+        self.assertEqual(details["promoted_tool_calls"], [])
+        self.assertEqual(details["promotion_block_reason"], "negative_tool_intent")
+        self.assertIsNone(details["actionable_output_repair"])
 
     def test_sample_artifact_prompt_still_promotes_tool_calls(self) -> None:
         response = {
@@ -908,12 +1088,15 @@ class ProxyNormalizationTests(unittest.TestCase):
         normalized, details = normalize_responses_response(response, request)
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
-        self.assertIn("Open Gate blocked a repeated external URL inspection", normalized["output"][0]["arguments"])
+        self.assertIn(
+            "Open Gate blocked a repeated external URL inspection",
+            diagnostic_text(normalized["output"][0]["arguments"]),
+        )
         self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
         self.assertEqual(details["command_quality_suppressed_structured_calls"], [])
         self.assertEqual(details["normalized_command_quality_issues"], [])
 
-    def test_repeated_external_url_non_artifact_ends_with_message(self) -> None:
+    def test_repeated_external_url_becomes_diagnostic_shell_call(self) -> None:
         request = self.request("Inspect https://styles.refero.design/ once, then summarize it.")
         request["input"].append(
             {
@@ -944,12 +1127,13 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         normalized, details = normalize_responses_response(response, request)
 
-        self.assertEqual(normalized["output"][0]["type"], "message")
-        self.assertIn("answer from available context", normalized["output"][0]["content"][0]["text"])
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertIn("repeated external URL inspection", diagnostic_text(normalized["output"][0]["arguments"]))
         self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
         self.assertEqual(details["actionable_output_repair"], None)
 
-    def test_uses_shell_for_repeated_external_url_diagnostic_when_update_plan_exists(self) -> None:
+    def test_prefers_shell_for_repeated_external_url_diagnostic_when_update_plan_exists(self) -> None:
         request = self.request_with_tools(
             "Inspect https://styles.refero.design/ once, then create index.html.",
             [*TOOLS, UPDATE_PLAN_TOOL],
@@ -979,43 +1163,10 @@ class ProxyNormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
         self.assertEqual(normalized["output"][0]["name"], "shell")
-        self.assertIn("Open Gate blocked a repeated external URL inspection", normalized["output"][0]["arguments"])
-        self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
-
-    def test_blocks_nonproductive_inspection_after_web_failure_for_index_artifact(self) -> None:
-        request = self.request("Build everything in index.html.")
-        request["input"].append(
-            {
-                "type": "function_call",
-                "name": "shell",
-                "call_id": "call_web",
-                "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Invoke-WebRequest -Uri 'https://styles.refero.design/' -TimeoutSec 10\"]}",
-            }
+        self.assertIn(
+            "Open Gate blocked a repeated external URL inspection",
+            diagnostic_text(normalized["output"][0]["arguments"]),
         )
-        request["input"].append(
-            {
-                "type": "function_call_output",
-                "call_id": "call_web",
-                "output": "Invoke-WebRequest : Unable to connect to the remote server",
-            }
-        )
-        response = {
-            "id": "resp_test",
-            "output": [
-                {
-                    "id": "fc_test",
-                    "type": "function_call",
-                    "name": "shell",
-                    "arguments": "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem -Name\"]}",
-                }
-            ],
-        }
-
-        normalized, details = normalize_responses_response(response, request)
-
-        self.assertEqual(normalized["output"][0]["type"], "function_call")
-        self.assertEqual(normalized["output"][0]["name"], "shell")
-        self.assertIn("non-productive inspection", normalized["output"][0]["arguments"])
         self.assertIn("quarantined_as", details["policy_suppressed_structured_calls"][0])
 
     def test_repairs_string_command_argument(self) -> None:
@@ -1039,6 +1190,80 @@ class ProxyNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(len(details["structured_argument_repairs"]), 1)
         self.assertEqual(details["upstream_command_quality_issues"][0]["issue"], "string_command")
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_quarantines_executable_only_shell_command_with_metadata(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": json.dumps(
+                        {
+                            "command": "powershell.exe",
+                            "justification": "Fetch reference site metadata",
+                            "prefix_rule": ["powershell.exe", "-Command", "(Invoke-Web"],
+                            "sandbox_permissions": "require_escalated",
+                        }
+                    ),
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request_with_tools("Create index.html.", [SHELL_WITH_APPROVAL_TOOL]),
+        )
+        arguments = json.loads(normalized["output"][0]["arguments"])
+        diagnostic = diagnostic_text(arguments)
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertIn("Open Gate blocked an invalid shell command (executable_only_command)", diagnostic)
+        self.assertIn("Continue with a smaller valid structured tool call", diagnostic)
+        self.assertNotIn("prefix_rule", arguments)
+        self.assertNotIn("sandbox_permissions", arguments)
+        self.assertNotIn("justification", arguments)
+        self.assertEqual(
+            {issue["issue"] for issue in details["command_quality_suppressed_structured_calls"][0]["command_quality_errors"]},
+            {"executable_only_command"},
+        )
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_quarantines_malformed_artifact_here_string_shell_command(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": json.dumps(
+                        {
+                            "command": "powershell.exe -Command \"Set-Content -LiteralPath 'index.html' -Value @```ENDOFHTML``@ -Encoding UTF8\"",
+                            "workdir": "C:\\Users\\example\\source\\repos\\glm-test",
+                        }
+                    ),
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(
+            response,
+            self.request_with_tools("Create index.html.", [SHELL_WITH_APPROVAL_TOOL]),
+        )
+        arguments = json.loads(normalized["output"][0]["arguments"])
+        diagnostic = diagnostic_text(arguments)
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertIn("malformed_powershell_here_string", diagnostic)
+        self.assertIn("Continue with a smaller valid structured tool call", diagnostic)
+        self.assertEqual(
+            {issue["issue"] for issue in details["command_quality_suppressed_structured_calls"][0]["command_quality_errors"]},
+            {"malformed_powershell_here_string"},
+        )
         self.assertEqual(details["normalized_command_quality_issues"], [])
 
     def test_repairs_nested_powershell_command_argument(self) -> None:
@@ -1080,7 +1305,10 @@ class ProxyNormalizationTests(unittest.TestCase):
         normalized, details = normalize_responses_response(response, self.request("Run the command."))
 
         self.assertEqual(normalized["output"][0]["type"], "function_call")
-        self.assertIn("Open Gate blocked an invalid shell command (windows_powershell_chain_operator)", normalized["output"][0]["arguments"])
+        self.assertIn(
+            "Open Gate blocked an invalid shell command (windows_powershell_chain_operator)",
+            diagnostic_text(normalized["output"][0]["arguments"]),
+        )
         self.assertEqual(
             {issue["issue"] for issue in details["normalized_command_quality_issues"]},
             set(),
@@ -1196,7 +1424,7 @@ class ProxyNormalizationTests(unittest.TestCase):
 
     def test_auto_transform_flattens_developer_role_when_capability_rejects_it(self) -> None:
         request = {
-            "model": "Qwen3.6-27B",
+            "model": "Local-Coder-27B",
             "tools": TOOLS,
             "input": [
                 {
@@ -1221,7 +1449,7 @@ class ProxyNormalizationTests(unittest.TestCase):
 
     def test_native_guardrail_uses_user_prefix_when_instruction_roles_are_unsupported(self) -> None:
         request = {
-            "model": "Qwen3.6-27B",
+            "model": "Local-Coder-27B",
             "tools": TOOLS,
             "input": [
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Look at a URL."}]},
@@ -1408,6 +1636,57 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertLessEqual(len(command_schema["description"]), 120)
         self.assertEqual(command_schema["items"]["type"], "string")
 
+    def test_request_diet_preserves_namespace_nested_tools(self) -> None:
+        request = {
+            "model": "DeepSeek-Coder-V2-Lite-Instruct",
+            "tools": [
+                TOOLS[0],
+                {
+                    "type": "namespace",
+                    "name": "mcp__node_repl__",
+                    "description": "JavaScript execution namespace. " * 200,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "js",
+                            "description": "Run JavaScript in a persistent Node-backed kernel. " * 400,
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "code": {
+                                        "type": "string",
+                                        "description": "JavaScript source to execute. " * 200,
+                                    },
+                                    "timeout_ms": {"type": "integer"},
+                                },
+                                "required": ["code"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        {
+                            "type": "function",
+                            "name": "js_reset",
+                            "description": "Reset the persistent kernel.",
+                            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                        },
+                    ],
+                },
+            ],
+            "input": "Say hello.",
+        }
+
+        details = apply_request_diet(request, instruction_policy="full", tool_schema_policy="compact")
+
+        namespace_tool = request["tools"][1]
+        nested_tools = namespace_tool["tools"]
+        self.assertTrue(details["tool_schema_diet_applied"])
+        self.assertEqual(namespace_tool["type"], "namespace")
+        self.assertEqual(namespace_tool["name"], "mcp__node_repl__")
+        self.assertEqual([tool["name"] for tool in nested_tools], ["js", "js_reset"])
+        self.assertLessEqual(len(namespace_tool["description"]), 220)
+        self.assertLessEqual(len(nested_tools[0]["description"]), 220)
+        self.assertLessEqual(len(nested_tools[0]["parameters"]["properties"]["code"]["description"]), 120)
+
     def test_transform_applies_request_diet_after_spooning(self) -> None:
         request = {
             "model": "GLM-4.7-Flash",
@@ -1474,9 +1753,48 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(result.upstream_transform["upstream_model"], "GLM-4.7-Flash")
         self.assertTrue(result.upstream_transform["model_overridden"])
 
+    def test_forward_request_adds_upstream_output_token_cap(self) -> None:
+        response = {"id": "resp_test", "output": []}
+        request = self.request("Create index.html.")
+
+        with patch("open_gate.proxy.post_json", return_value=(200, response)):
+            result = forward_responses_request(
+                request_body=request,
+                upstream_base_url="http://upstream.invalid/v1",
+                api_key="sk-test",
+                timeout=1.0,
+                normalization_mode="repair",
+                upstream_max_output_tokens=2048,
+            )
+
+        self.assertEqual(result.upstream_request["max_output_tokens"], 2048)
+        self.assertEqual(result.upstream_transform["upstream_max_output_tokens"], 2048)
+        self.assertTrue(result.upstream_transform["max_output_tokens_added"])
+        self.assertFalse(result.upstream_transform["max_output_tokens_capped"])
+
+    def test_forward_request_preserves_lower_client_output_token_cap(self) -> None:
+        response = {"id": "resp_test", "output": []}
+        request = self.request("Create index.html.")
+        request["max_output_tokens"] = 512
+
+        with patch("open_gate.proxy.post_json", return_value=(200, response)):
+            result = forward_responses_request(
+                request_body=request,
+                upstream_base_url="http://upstream.invalid/v1",
+                api_key="sk-test",
+                timeout=1.0,
+                normalization_mode="repair",
+                upstream_max_output_tokens=2048,
+            )
+
+        self.assertEqual(result.upstream_request["max_output_tokens"], 512)
+        self.assertEqual(result.upstream_transform["max_output_tokens_sent"], 512)
+        self.assertFalse(result.upstream_transform["max_output_tokens_added"])
+        self.assertFalse(result.upstream_transform["max_output_tokens_capped"])
+
     def test_forward_retries_flattened_when_upstream_rejects_native_role(self) -> None:
         request = {
-            "model": "Qwen3.6-27B",
+            "model": "Local-Coder-27B",
             "tool_choice": "auto",
             "tools": TOOLS,
             "input": [

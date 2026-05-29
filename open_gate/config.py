@@ -18,6 +18,7 @@ DEFAULT_CONFIG: JsonObject = {
     "upstream_base_url": None,
     "upstream_api_key": "sk-no-key-required",
     "upstream_timeout": 420.0,
+    "upstream_max_output_tokens": 4096,
     "capability_probe": "auto",
     "capability_probe_timeout": 8.0,
     "normalization_mode": "repair",
@@ -95,6 +96,7 @@ def flatten_config(raw: JsonObject) -> JsonObject:
         "instruction_policy",
         "tool_schema_policy",
         "stream_heartbeat_seconds",
+        "upstream_max_output_tokens",
     )
     return {key: value for key, value in flattened.items() if value is not None}
 

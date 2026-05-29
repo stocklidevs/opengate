@@ -36,6 +36,7 @@ class ServerStreamingTests(unittest.TestCase):
                     "instruction_policy": "auto",
                     "tool_schema_policy": "auto",
                     "stream_heartbeat_seconds": 0.05,
+                    "upstream_max_output_tokens": 4096,
                     "quiet": True,
                 },
             )
@@ -59,6 +60,7 @@ class ServerStreamingTests(unittest.TestCase):
             self.assertEqual(payload["context_policy"], "spoon")
             self.assertEqual(payload["instruction_policy"], "auto")
             self.assertEqual(payload["tool_schema_policy"], "auto")
+            self.assertEqual(payload["upstream_max_output_tokens"], 4096)
             self.assertEqual(payload["model_source"], None)
 
     def test_resolve_model_autodetects_from_upstream_models(self) -> None:
@@ -77,7 +79,7 @@ class ServerStreamingTests(unittest.TestCase):
 
     def test_resolve_capabilities_records_probe_result(self) -> None:
         config = {
-            "model": "Qwen3.6-27B",
+            "model": "Local-Coder-27B",
             "upstream_base_url": "http://upstream.invalid/v1",
             "upstream_api_key": "sk-test",
             "upstream_timeout": 120.0,
@@ -112,6 +114,7 @@ class ServerStreamingTests(unittest.TestCase):
             "instruction_policy": "auto",
             "tool_schema_policy": "auto",
             "stream_heartbeat_seconds": 2,
+            "upstream_max_output_tokens": 4096,
             "quiet": False,
             "config_path": "opengate.toml",
         }
@@ -122,6 +125,7 @@ class ServerStreamingTests(unittest.TestCase):
         banner = mocked_print.call_args.args[0]
         self.assertIn("version:", banner)
         self.assertIn("--upstream-base-url", banner)
+        self.assertIn("--upstream-max-output-tokens", banner)
         self.assertIn("GLM-4.7-Flash", banner)
 
     def test_streaming_proxy_sends_heartbeat_before_buffered_response(self) -> None:

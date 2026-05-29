@@ -55,6 +55,7 @@ class Handler(BaseHTTPRequestHandler):
                     "instruction_policy": self.server.config.get("instruction_policy", "auto"),
                     "tool_schema_policy": self.server.config.get("tool_schema_policy", "auto"),
                     "stream_heartbeat_seconds": self.server.config.get("stream_heartbeat_seconds", 5.0),
+                    "upstream_max_output_tokens": self.server.config.get("upstream_max_output_tokens"),
                     "capture_dir": self.server.config.get("capture_dir"),
                     "config_path": self.server.config.get("config_path"),
                     "model_source": self.server.config.get("model_source"),
@@ -181,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             tool_schema_policy=self.server.config["tool_schema_policy"],
             upstream_model=self.server.config.get("model") if self.server.config.get("upstream_base_url") else None,
             upstream_capabilities=self.server.config.get("upstream_capabilities"),
+            upstream_max_output_tokens=int(self.server.config.get("upstream_max_output_tokens", 4096)),
         )
 
     def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
@@ -472,6 +474,7 @@ SETTING_DESCRIPTIONS = {
     "upstream_base_url": "OpenAI-compatible upstream base URL, usually your vLLM /v1 endpoint.",
     "upstream_api_key": "Bearer token sent upstream; vLLM usually ignores the placeholder default.",
     "upstream_timeout": "Seconds OpenGate waits for one buffered upstream model response.",
+    "upstream_max_output_tokens": "Maximum output tokens forwarded to local upstream models; 0 disables the cap.",
     "capability_probe": "Controls startup upstream protocol probes: auto or off.",
     "capability_probe_timeout": "Seconds allowed for each startup protocol probe.",
     "upstream_capabilities": "Cached upstream protocol support discovered by startup probes.",
@@ -608,6 +611,7 @@ def print_startup_banner(config: JsonObject) -> None:
         "upstream_base_url",
         "upstream_api_key",
         "upstream_timeout",
+        "upstream_max_output_tokens",
         "capability_probe",
         "capability_probe_timeout",
         "upstream_capabilities",
@@ -643,6 +647,7 @@ def main() -> int:
     parser.add_argument("--upstream-base-url", "--upstream", dest="upstream_base_url", help="Forward /v1/responses to this OpenAI-compatible upstream base URL.")
     parser.add_argument("--upstream-api-key")
     parser.add_argument("--upstream-timeout", type=float)
+    parser.add_argument("--upstream-max-output-tokens", type=int)
     parser.add_argument("--capability-probe", choices=["auto", "off"])
     parser.add_argument("--capability-probe-timeout", type=float)
     parser.add_argument("--stream-heartbeat-seconds", type=float, help="Seconds between Responses heartbeat events while waiting for a buffered upstream response.")
@@ -696,6 +701,8 @@ def main() -> int:
 
     if float(config["stream_heartbeat_seconds"]) <= 0:
         parser.error("--stream-heartbeat-seconds must be greater than 0")
+    if int(config["upstream_max_output_tokens"]) < 0:
+        parser.error("--upstream-max-output-tokens must be at least 0")
     if int(config["context_max_chars"]) < 4000:
         parser.error("--context-max-chars must be at least 4000")
     if int(config["context_recent_items"]) < 1:
