@@ -463,7 +463,7 @@
         "strict": false,
         "type": "function",
         "defer_loading": null,
-        "description": "Available model overrides (optional; inherited parent model is preferred): - GPT-5.5 (`gpt-5.5`\n[... omitted 6271 chars ...]\ne ensuring each subtask is well-defined, self-contained, and materially advances the main task."
+        "description": "Spawn a sub-agent for a well-scoped task. Public fixture copy redacts captured model override listings and internal delegation guidance."
       },
       {
         "name": "send_input",
