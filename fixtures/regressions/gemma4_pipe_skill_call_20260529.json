@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "name": "gemma4_pipe_skill_call_20260529",
+  "source_capture": "runs\\codex-live\\20260529-202640-gemma4_e4b_it_software_build_0619-repair\\captures\\20260530-002917-615925-proxy-6033a1af.json",
+  "created_at": "2026-05-30T00:32:00+00:00",
+  "notes": "Gemma software-build live run emitted a raw <|tool_call> skill invocation after <channel|>; OpenGate should not return that raw unavailable tool syntax to Codex.",
+  "request": {
+    "model": "Gemma-4-E4B-IT",
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "stream": false,
+    "store": false,
+    "temperature": 0.0,
+    "max_output_tokens": 4096,
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Build a polished single-file habit tracker web app. Work only in this folder."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell",
+        "description": "Runs a Powershell command (Windows) and returns its output.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workdir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "upstream_response": {
+    "id": "chatcmpl-gemma4-pipe-skill-call",
+    "object": "response",
+    "created": 1780100960,
+    "model": "Gemma-4-E4B-IT",
+    "output": [
+      {
+        "id": "msg-gemma4-pipe-skill-call",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "annotations": [],
+            "text": "The user wants me to build a single-file habit tracker web application. I should start with brainstorming before writing files.<channel|><|tool_call>call:superpowers:brainstorming{message:<|\"|>I need to build a single-file, self-contained habit tracker web application in index.html.<|\"|>}<tool_call|>"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "no_text_leaks": true,
+    "no_invalid_tool_calls": true,
+    "no_command_quality_issues": true,
+    "minimum_structured_argument_repairs": 0,
+    "minimum_text_tool_call_repairs": 0,
+    "minimum_channel_delimiter_text_repairs": 1,
+    "minimum_actionable_output_repairs": 1,
+    "expected_tool_calls": [
+      "shell"
+    ],
+    "expected_output_fragments": [
+      "reasoning only and no tool call"
+    ],
+    "expected_absent_fragments": [
+      "<|tool_call>",
+      "superpowers:brainstorming"
+    ]
+  },
+  "observed_after_normalization": {
+    "structured_argument_repairs": [],
+    "text_leaks": [],
+    "command_quality_issues": [],
+    "channel_delimiter_text_repairs": [
+      {
+        "after": "<|tool_call>call:superpowers:brainstorming{message:<|\"|>I need to build a single-file, self-contained habit tracker web application in index.html.<|\"|>}<tool_call|>"
+      }
+    ]
+  }
+}

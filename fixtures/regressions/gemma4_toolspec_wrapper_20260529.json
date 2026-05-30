@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "name": "gemma4_toolspec_wrapper_20260529",
+  "source_capture": "runs\\gemma4_e4b_it_open_gate_repair_spoon_r1\\captures\\20260529-230431-387188-proxy-8cccd545.json",
+  "created_at": "2026-05-29T23:19:36.598402+00:00",
+  "notes": "Gemma fenced JSON toolSpec wrapper after a channel marker should be parsed as a generic text tool-call leak and promoted to a structured shell call.",
+  "request": {
+    "model": "Gemma-4-E4B-IT",
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "stream": false,
+    "store": false,
+    "temperature": 0.0,
+    "max_output_tokens": 512,
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Before running the command, place the tool call in a fenced ```json block so I can inspect it. Then use shell to run [\"powershell.exe\", \"-Command\", \"Get-Location\"] in workdir \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell",
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to shell are passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"].",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "description": "The command to execute.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workdir": {
+              "type": "string",
+              "description": "The working directory to execute the command in."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "The timeout for the command in milliseconds."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "update_plan",
+        "description": "Updates the task plan.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "explanation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "plan"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "view_image",
+        "description": "View a local image from the filesystem.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local filesystem path to an image file."
+            },
+            "detail": {
+              "type": "string",
+              "description": "Optional detail override."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "upstream_response": {
+    "id": "resp_9ff47c4296473188",
+    "created_at": 1780095857,
+    "incomplete_details": null,
+    "instructions": null,
+    "metadata": null,
+    "model": "Gemma-4-E4B-IT",
+    "object": "response",
+    "output": [
+      {
+        "id": "msg_b8cfc22a21e54723",
+        "content": [
+          {
+            "annotations": [],
+            "text": "The user wants me to execute a specific command using the `shell` tool.\nThe command is: `[\"powershell.exe\", \"-Command\", \"Get-Location\"]`\nThe working directory is: `\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"`\n\nI need to wrap the tool call in a fenced ```json block as requested by the user before executing it.\n\nTool call structure:\n```json\n{\n  \"toolSpec\": {\n    \"name\": \"shell\",\n    \"args\": {\n      \"command\": [\n        \"powershell.exe\",\n        \"-Command\",\n        \"Get-Location\"\n      ],\n      \"workdir\": \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"\n    }\n  }\n}\n```<channel|>```json\n{\n  \"toolSpec\": {\n    \"name\": \"shell\",\n    \"args\": {\n      \"command\": [\n        \"powershell.exe\",\n        \"-Command\",\n        \"Get-Location\"\n      ],\n      \"workdir\": \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"\n    }\n  }\n}\n```",
+            "type": "output_text",
+            "logprobs": null
+          }
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+        "phase": null
+      }
+    ],
+    "parallel_tool_calls": true,
+    "temperature": 0.0,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "name": "shell",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "description": "The command to execute.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workdir": {
+              "type": "string",
+              "description": "The working directory to execute the command in."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "The timeout for the command in milliseconds."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to shell are passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"]."
+      },
+      {
+        "name": "update_plan",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "explanation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "plan"
+          ],
+          "additionalProperties": false
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Updates the task plan."
+      },
+      {
+        "name": "view_image",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local filesystem path to an image file."
+            },
+            "detail": {
+              "type": "string",
+              "description": "Optional detail override."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "View a local image from the filesystem."
+      }
+    ],
+    "top_p": 1.0,
+    "background": false,
+    "max_output_tokens": 512,
+    "max_tool_calls": null,
+    "previous_response_id": null,
+    "prompt": null,
+    "reasoning": null,
+    "service_tier": "auto",
+    "status": "completed",
+    "text": null,
+    "top_logprobs": null,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 983,
+      "input_tokens_details": {
+        "cached_tokens": 288,
+        "input_tokens_per_turn": [],
+        "cached_tokens_per_turn": []
+      },
+      "output_tokens": 262,
+      "output_tokens_details": {
+        "reasoning_tokens": 0,
+        "tool_output_tokens": 0,
+        "output_tokens_per_turn": [],
+        "tool_output_tokens_per_turn": []
+      },
+      "total_tokens": 1245
+    },
+    "user": null,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "kv_transfer_params": null,
+    "input_messages": null,
+    "output_messages": null
+  },
+  "expected": {
+    "no_text_leaks": true,
+    "no_invalid_tool_calls": true,
+    "no_command_quality_issues": true,
+    "minimum_structured_argument_repairs": 0,
+    "minimum_text_tool_call_repairs": 0,
+    "expected_tool_calls": [
+      "shell"
+    ]
+  },
+  "observed_after_normalization": {
+    "structured_argument_repairs": [],
+    "text_leaks": [],
+    "command_quality_issues": []
+  }
+}

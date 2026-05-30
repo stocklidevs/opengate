@@ -239,6 +239,18 @@ def inspect_shell_arguments(arguments: JsonObject, source: str = "") -> list[Jso
         )
         return issues
 
+    if len(command) == 1 and looks_like_embedded_json_command_array_item(command[0]):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "malformed_embedded_json_command_array",
+                "severity": "error",
+                "source": source,
+                "command": command,
+                "message": "The shell command array contains escaped JSON fragments instead of executable arguments.",
+            }
+        )
+
     if looks_like_executable_only_shell_command(command):
         issues.append(executable_only_shell_command_issue(command, arguments, source))
 
@@ -663,6 +675,8 @@ def repair_direct_powershell_cmdlet(command: Any) -> list[str] | None:
         return None
     if not looks_like_powershell_cmdlet(command[0]):
         return None
+    if len(command) == 1 and looks_like_single_powershell_script(command[0]):
+        return ["powershell.exe", "-Command", command[0].strip()]
     return ["powershell.exe", "-Command", join_powershell_command_tokens(command)]
 
 
@@ -925,14 +939,40 @@ def executable_only_shell_command_issue(command: list[str], arguments: JsonObjec
 
 def looks_like_powershell_cmdlet(value: str) -> bool:
     stripped = value.strip().strip("\"'")
-    if "\\" in stripped or "/" in stripped or "." in path_last_segment(stripped):
+    command_name = first_powershell_command_token(stripped)
+    if not command_name:
         return False
-    if stripped.lower() in POWERSHELL_ALIAS_COMMANDS:
+    if "\\" in command_name or "/" in command_name or "." in path_last_segment(command_name):
+        return False
+    if command_name.lower() in POWERSHELL_ALIAS_COMMANDS:
         return True
-    if "-" not in stripped:
+    if "-" not in command_name:
         return False
-    verb = stripped.split("-", 1)[0].lower()
+    verb = command_name.split("-", 1)[0].lower()
     return verb in POWERSHELL_CMDLET_VERBS
+
+
+def first_powershell_command_token(value: str) -> str:
+    tokens = split_command_line(value)
+    if not tokens:
+        tokens = value.split()
+    for token in tokens:
+        cleaned = strip_outer_quotes(token.strip())
+        if not cleaned or cleaned == "&" or cleaned in POWERSHELL_OPERATOR_TOKENS:
+            continue
+        return cleaned
+    return ""
+
+
+def looks_like_single_powershell_script(value: str) -> bool:
+    return bool(re.search(r"\s|[|;<>]", value.strip()))
+
+
+def looks_like_embedded_json_command_array_item(value: str) -> bool:
+    stripped = value.strip()
+    if not re.search(r'(?i)(?:powershell|pwsh)(?:\.exe)?",\s*"[/-]?(?:command|c)",', stripped):
+        return False
+    return bool(re.search(r'"\]\s*,\s*"[A-Za-z_][A-Za-z0-9_]*"\s*:', stripped)) or stripped.count('","') >= 2
 
 
 def contains_powershell_chain_operator(script: str) -> bool:

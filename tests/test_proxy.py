@@ -166,6 +166,177 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["output"][0]["name"], "shell")
         self.assertEqual(details["promoted_tool_calls"][0]["name"], "shell")
 
+    def test_promotes_fenced_tool_spec_wrapper(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "Before running it, place the tool call in a fenced ```json block for inspection.\n\n"
+                                "Tool call structure:\n"
+                                "```json\n"
+                                '{"toolSpec":{"name":"shell","args":{"command":["powershell.exe","-Command","Get-Location"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}}}\n'
+                                "```<channel|>```json\n"
+                                '{"toolSpec":{"name":"shell","args":{"command":["powershell.exe","-Command","Get-Location"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}}}\n'
+                                "```"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Run Get-Location with shell."))
+
+        function_call = next(item for item in normalized["output"] if item.get("type") == "function_call")
+        self.assertEqual(function_call["name"], "shell")
+        self.assertNotIn("toolSpec", normalized["output"][0]["content"][0]["text"])
+        self.assertNotIn("<channel|>", normalized["output"][0]["content"][0]["text"])
+        self.assertEqual(details["promoted_tool_calls"][0]["source"], "fenced_json")
+        self.assertEqual(details["stripped_text_items"], 1)
+
+    def test_strips_channel_delimited_assistant_answer_suffix(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "The user asked me to inspect the current directory.\n"
+                                "I should answer with the number I saw.\n"
+                                "<channel|>I saw 4 entries in the current directory."
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("How many entries?"))
+
+        self.assertEqual(
+            normalized["output"][0]["content"][0]["text"],
+            "I saw 4 entries in the current directory.",
+        )
+        self.assertEqual(details["channel_delimiter_text_repairs"][0]["after"], "I saw 4 entries in the current directory.")
+        self.assertEqual(details["stripped_text_items"], 0)
+
+    def test_leaves_channel_delimiter_without_answer_suffix(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "I will answer now.<channel|>   "}],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Say hello."))
+
+        self.assertEqual(normalized["output"][0]["content"][0]["text"], "I will answer now.<channel|>   ")
+        self.assertEqual(details["channel_delimiter_text_repairs"], [])
+
+    def test_does_not_strip_channel_delimiter_from_reasoning_item(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "reasoning_test",
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning_text", "text": "private analysis<channel|>visible suffix"}],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Think."))
+
+        self.assertEqual(
+            normalized["output"][0]["content"][0]["text"],
+            "private analysis<channel|>visible suffix",
+        )
+        self.assertEqual(details["channel_delimiter_text_repairs"], [])
+
+    def test_channel_suffix_gemma_skill_tool_call_becomes_diagnostic(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "I should plan before writing files."
+                                '<channel|><|tool_call>call:superpowers:brainstorming'
+                                '{message:<|"|>Plan the implementation.<|"|>}<tool_call|>'
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Create the requested files."))
+        message_text = normalized["output"][0]["content"][0]["text"]
+        diagnostic_call = normalized["output"][1]
+        diagnostic = diagnostic_text(diagnostic_call["arguments"])
+
+        self.assertEqual(message_text, "")
+        self.assertEqual(diagnostic_call["type"], "function_call")
+        self.assertEqual(diagnostic_call["name"], "shell")
+        self.assertIn("reasoning only and no tool call", diagnostic)
+        self.assertEqual(details["channel_delimiter_text_repairs"][0]["after"], '<|tool_call>call:superpowers:brainstorming{message:<|"|>Plan the implementation.<|"|>}<tool_call|>')
+        self.assertEqual(details["stripped_text_items"], 1)
+        self.assertEqual(details["invalid_tool_calls"][0]["name"], "superpowers:brainstorming")
+        self.assertNotIn("<|tool_call>", json.dumps(normalized))
+
+    def test_channel_suffix_codex_transcript_tool_call_is_promoted(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "I will create the file."
+                                "<channel|>assistant tool call shell chatcmpl-tool-8e5c932fb4903995:\n"
+                                '{"command":["powershell.exe","-Command","Set-Content -Path sample.txt -Value ok"]}\n\n'
+                                "tool output chatcmpl-tool-8e5c932fb4903995:\n"
+                                '{"output":"","metadata":{"exit_code":0,"duration_seconds":0.4}}'
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Create sample.txt."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertEqual(details["promoted_tool_calls"][0]["source"], "codex_transcript_tool_call")
+        self.assertEqual(details["stripped_text_items"], 1)
+        self.assertNotIn("assistant tool call", json.dumps(normalized))
+        self.assertNotIn("tool output", json.dumps(normalized))
+
     def test_promotes_glm_tool_call_tag(self) -> None:
         response = {
             "id": "resp_test",
@@ -610,6 +781,77 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(
             normalized["output"][0]["arguments"],
             "{\"command\":[\"powershell.exe\",\"-Command\",\"dir\"]}",
+        )
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_repairs_structured_single_powershell_pipeline_without_literal_quotes(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"Get-ChildItem | Measure-Object -Line\"],\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the directory."))
+
+        self.assertEqual(
+            normalized["output"][0]["arguments"],
+            "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem | Measure-Object -Line\"],\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}",
+        )
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_repairs_structured_single_powershell_script_with_dot_path_argument(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "{\"command\":[\"Get-ChildItem -Path . | Measure-Object\"],\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}",
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the directory."))
+
+        self.assertEqual(
+            normalized["output"][0]["arguments"],
+            "{\"command\":[\"powershell.exe\",\"-Command\",\"Get-ChildItem -Path . | Measure-Object\"],\"workdir\":\"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}",
+        )
+        self.assertEqual(details["normalized_command_quality_issues"], [])
+
+    def test_suppresses_structured_escaped_json_tail_command(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "fc_test",
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": json.dumps(
+                        {
+                            "command": [
+                                'powershell.exe","-Command","\'(Get-ChildItem).Count\'"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"'
+                            ]
+                        }
+                    ),
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the directory."))
+        arguments = diagnostic_text(normalized["output"][0]["arguments"])
+
+        self.assertIn("Open Gate blocked an invalid shell command (malformed_embedded_json_command_array)", arguments)
+        self.assertEqual(
+            {issue["issue"] for issue in details["command_quality_suppressed_structured_calls"][0]["command_quality_errors"]},
+            {"malformed_embedded_json_command_array"},
         )
         self.assertEqual(details["normalized_command_quality_issues"], [])
 

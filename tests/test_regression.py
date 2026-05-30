@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from open_gate.regression import iter_fixture_paths, run_fixture_path
+from open_gate.regression import iter_fixture_paths, run_fixture, run_fixture_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +30,61 @@ class RegressionFixtureTests(unittest.TestCase):
             ["powershell.exe", "-Command", "Get-ChildItem -Force | Measure-Object | Select-Object -ExpandProperty Count"],
         )
         self.assertEqual(result["command_quality_issues"], [])
+
+    def test_expected_absent_fragments_fail_when_text_remains(self) -> None:
+        result = run_fixture(
+            {
+                "name": "absent-fragment-check",
+                "request": {},
+                "upstream_response": {
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "visible answer with banned text",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                "expected": {
+                    "expected_absent_fragments": ["banned text"],
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["failures"],
+            ["unexpected normalized output fragment remained: banned text"],
+        )
+
+    def test_minimum_channel_delimiter_text_repairs_fail_when_missing(self) -> None:
+        result = run_fixture(
+            {
+                "name": "channel-repair-minimum-check",
+                "request": {},
+                "upstream_response": {
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "plain answer"}],
+                        }
+                    ],
+                },
+                "expected": {
+                    "minimum_channel_delimiter_text_repairs": 1,
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["failures"],
+            ["expected at least 1 channel delimiter text repair(s), got 0"],
+        )
 
 
 if __name__ == "__main__":

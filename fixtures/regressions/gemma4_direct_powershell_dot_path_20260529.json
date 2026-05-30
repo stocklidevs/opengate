@@ -1,0 +1,732 @@
+{
+  "schema_version": 1,
+  "name": "gemma4_direct_powershell_dot_path_20260529",
+  "source_capture": "runs\\codex-live\\20260529-194804-gemma4_e4b_it_live_smoke_workspace_cq_repair-repair\\captures\\20260529-234906-810789-proxy-ed9a8eee.json",
+  "created_at": "2026-05-29T23:52:06.296764+00:00",
+  "notes": "Gemma live smoke emitted a one-item shell command array containing a PowerShell script with -Path .; OpenGate must classify by the command token and wrap it without quoting the script as a literal.",
+  "request": {
+    "model": "Gemma-4-E4B-IT",
+    "tool_choice": "auto",
+    "parallel_tool_calls": false,
+    "stream": true,
+    "store": false,
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Inspect the current directory with shell, then reply with the number of entries you saw."
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell",
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with [\"powershell.exe\", \"-Command\"].\n\nExamples of valid command strings:\n\n- ls -a (show hidden): [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Force\"]\n- recursive find by name: [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Recurse -Filter *.py\"]\n- recursive grep: [\"powershell.exe\", \"-Command\", \"Get-ChildItem -Path C:\\\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive\"]\n- ps aux | grep python: [\"powershell.exe\", \"-Command\", \"Get-Process | Where-Object { $_.ProcessName -like '*python*' }\"]\n- setting an env var: [\"powershell.exe\", \"-Command\", \"$env:FOO='bar'; echo $env:FOO\"]\n- running an inline Python script: [\"powershell.exe\", \"-Command\", \"@'\\\\nprint('Hello, world!')\\\\n'@ | python -\"]\n\nWindows safety rules:\n- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.\n- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.\n- When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control.",
+        "strict": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "description": "The command to execute",
+              "items": {
+                "type": "string"
+              }
+            },
+            "justification": {
+              "type": "string",
+              "description": "Only set if sandbox_permissions is \\\"require_escalated\\\".\n                    Request approval from the user to run this command outside the sandbox.\n                    Phrased as a simple question that summarizes the purpose of the\n                    command as it relates to the task at hand - e.g. 'Do you want to\n                    fetch and pull the latest version of this git branch?'"
+            },
+            "prefix_rule": {
+              "type": "array",
+              "description": "Only specify when sandbox_permissions is `require_escalated`.\n                        Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.\n                        Should be a short but reasonable prefix, e.g. [\\\"git\\\", \\\"pull\\\"] or [\\\"uv\\\", \\\"run\\\"] or [\\\"pytest\\\"].",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sandbox_permissions": {
+              "type": "string",
+              "description": "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "The timeout for the command in milliseconds"
+            },
+            "workdir": {
+              "type": "string",
+              "description": "The working directory to execute the command in"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "upstream_response": {
+    "id": "resp_ad0ffdaeb9d5a78e",
+    "created_at": 1780098534,
+    "incomplete_details": null,
+    "instructions": "Open Gate instruction digest:\n- You are a concise coding agent running inside Codex CLI.\n- Follow the latest user task, developer messages, environment context, and tool schemas.\n- Use only structured tool calls with advertised tool names and exact argument shapes.\n- Never print raw tool-call XML, JSON tool_calls arrays, recipient_name syntax, or function-call text.\n- Prefer small direct steps, update plans only when useful, and avoid loops after failures.\n- Respect sandbox and approval information in the request context.\n- Do not call spawn_agent unless the user explicitly asked for subagents, delegation, or parallel agent work.\n- When creating files, write the requested artifact directly instead of dumping large content to stdout.\n- Never create or truncate an empty target artifact as a placeholder.",
+    "metadata": null,
+    "model": "Gemma-4-E4B-IT",
+    "object": "response",
+    "output": [
+      {
+        "id": "msg_87d0075bb3ab7a6f",
+        "content": [
+          {
+            "annotations": [],
+            "text": "The user wants me to list the contents of the current working directory (`C:\\Users\\example\\source\\repos\\glm-test`) using a shell command and then report the number of entries found.\n\nI need to use the `shell` tool with a PowerShell command to list directory contents. The appropriate command in PowerShell is `Get-ChildItem` or its alias `ls` or `dir`. I will use `Get-ChildItem` and pipe the result to `Measure-Object` to count the items, as requested.\n\nPlan:\n1.  Execute `Get-ChildItem` in the current directory (`C:\\Users\\example\\source\\repos\\glm-test`) and count the entries using `Measure-Object`.\n2.  Parse the output to get the count.\n3.  Reply to the user with the number of entries.\n\nI will start with step 1.<channel|>",
+            "type": "output_text",
+            "logprobs": null
+          }
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+        "phase": null
+      },
+      {
+        "arguments": "{\"command\": [\"Get-ChildItem -Path . | Measure-Object\"], \"workdir\": \"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test\"}",
+        "call_id": "chatcmpl-tool-93b353fafb439680",
+        "name": "shell",
+        "type": "function_call",
+        "id": "fc_8c32eb6e66115a14",
+        "namespace": null,
+        "status": "completed"
+      }
+    ],
+    "parallel_tool_calls": false,
+    "temperature": 1.0,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "name": "shell",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "array",
+              "description": "The command to execute",
+              "items": {
+                "type": "string"
+              }
+            },
+            "justification": {
+              "type": "string",
+              "description": "Only set if sandbox_permissions is \\\"require_\n[... omitted 193 chars ...]\nd pull the latest version of this git branch?'"
+            },
+            "prefix_rule": {
+              "type": "array",
+              "description": "Only specify when sandbox_permissions is `req\n[... omitted 155 chars ...]\n\"pull\\\"] or [\\\"uv\\\", \\\"run\\\"] or [\\\"pytest\\\"].",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sandbox_permissions": {
+              "type": "string",
+              "description": "Sandbox permissions for the command. Set to \"r\n[... omitted 19 chars ...]\nndbox restrictions; defaults to \"use_default\"."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "The timeout for the command in milliseconds"
+            },
+            "workdir": {
+              "type": "string",
+              "description": "The working directory to execute the command in"
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed\n[... omitted 1537 chars ...]\nactive window. Use visible windows only for interactive tools the user needs to see or control."
+      },
+      {
+        "name": "list_mcp_resources",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "description": "Opaque cursor returned by a previous list_mcp_resources call for the same server."
+            },
+            "server": {
+              "type": "string",
+              "description": "Optional MCP server name. When omitted, lists resources from every configured server."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Lists resources provided by MCP servers. Resources allow servers to share data that provides con\n[... omitted 18 chars ...]\nse schemas, or application-specific information. Prefer resources over web search when possible."
+      },
+      {
+        "name": "list_mcp_resource_templates",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "description": "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
+            },
+            "server": {
+              "type": "string",
+              "description": "Optional MCP server name. When omitted, lists resource templates from all configured servers."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers\n[... omitted 80 chars ...]\ns, or application-specific information. Prefer resource templates over web search when possible."
+      },
+      {
+        "name": "read_mcp_resource",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "server",
+            "uri"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
+            },
+            "uri": {
+              "type": "string",
+              "description": "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Read a specific resource from an MCP server given the server name and resource URI."
+      },
+      {
+        "name": "update_plan",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "plan"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "explanation": {
+              "type": "string"
+            },
+            "plan": {
+              "type": "array",
+              "description": "The list of steps",
+              "items": {
+                "type": "object",
+                "required": [
+                  "step",
+                  "status"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "description": "One of: pending, in_progress, completed"
+                  },
+                  "step": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Updates the task plan. Provide an optional explanation and a list of plan items, each with a step and status. At most one step can be in_progress at a time."
+      },
+      {
+        "name": "request_user_input",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "questions"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "questions": {
+              "type": "array",
+              "description": "Questions to show the user. Prefer 1 and do not exceed 3",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "header",
+                  "question",
+                  "options"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "header": {
+                    "type": "string",
+                    "description": "Short header label shown in the UI (12 or fewer chars)."
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "Stable identifier for mapping answers (snake_case)."
+                  },
+                  "options": {
+                    "type": "array",
+                    "description": "Provide 2-3 mutually exclusive choices. Put t\n[... omitted 104 chars ...]\n add a free-form \"Other\" option automatically.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "label",
+                        "description"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "description": {
+                          "type": "string",
+                          "description": "One short sentence explaining impact/tradeoff if selected."
+                        },
+                        "label": {
+                          "type": "string",
+                          "description": "User-facing label (1-5 words)."
+                        }
+                      }
+                    }
+                  },
+                  "question": {
+                    "type": "string",
+                    "description": "Single-sentence prompt shown to the user."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode."
+      },
+      {
+        "name": "request_plugin_install",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "tool_type",
+            "action_type",
+            "tool_id",
+            "suggest_reason"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "action_type": {
+              "type": "string",
+              "description": "Suggested action for the tool. Use \"install\"."
+            },
+            "suggest_reason": {
+              "type": "string",
+              "description": "Concise one-line user-facing reason why this plugin or connector can help with the current request."
+            },
+            "tool_id": {
+              "type": "string",
+              "description": "Connector or plugin id to suggest."
+            },
+            "tool_type": {
+              "type": "string",
+              "description": "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "# Request plugin/connector install Use this tool only to ask the user to install one known plug\n[... omitted 4255 chars ...]\nthe user explicitly asks for it. IMPORTANT: DO NOT call this tool in parallel with other tools."
+      },
+      {
+        "type": "web_search",
+        "filters": null,
+        "search_context_size": null,
+        "user_location": null
+      },
+      {
+        "type": "image_generation",
+        "action": null,
+        "background": null,
+        "input_fidelity": null,
+        "input_image_mask": null,
+        "model": null,
+        "moderation": null,
+        "output_compression": null,
+        "output_format": null,
+        "partial_images": null,
+        "quality": null,
+        "size": null
+      },
+      {
+        "name": "view_image",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local filesystem path to an image file"
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
+      },
+      {
+        "name": "spawn_agent",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agent_type": {
+              "type": "string",
+              "description": "Optional type name for the new agent. If omit\n[... omitted 2062 chars ...]\nflicts and ensure a cohesive final product. }"
+            },
+            "fork_context": {
+              "type": "boolean",
+              "description": "When true, fork the current thread history int\n[... omitted 63 chars ...]\nagent to have exactly the same context as you."
+            },
+            "items": {
+              "type": "array",
+              "description": "Structured input items. Use this to pass explicit mentions (for example app:// connector paths).",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "image_url": {
+                    "type": "string",
+                    "description": "Image URL when type is image."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Display name when type is skill or mention."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Path when type is local_image/skill, or struct\n[... omitted 41 chars ...]\nname>@<marketplace-name> when type is mention."
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Text content when type is text."
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "Input item type: text, image, local_image, skill, or mention."
+                  }
+                }
+              }
+            },
+            "message": {
+              "type": "string",
+              "description": "Initial plain-text task for the new agent. Use either message or items."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model override for the new agent. Le\n[... omitted 107 chars ...]\nferent model or the task clearly requires one."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Available model overrides (optional; inherited parent model is preferred): - GPT-5.5 (`gpt-5.5`\n[... omitted 6271 chars ...]\ne ensuring each subtask is well-defined, self-contained, and materially advances the main task."
+      },
+      {
+        "name": "send_input",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "interrupt": {
+              "type": "boolean",
+              "description": "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+            },
+            "items": {
+              "type": "array",
+              "description": "Structured input items. Use this to pass explicit mentions (for example app:// connector paths).",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "image_url": {
+                    "type": "string",
+                    "description": "Image URL when type is image."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Display name when type is skill or mention."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Path when type is local_image/skill, or struct\n[... omitted 41 chars ...]\nname>@<marketplace-name> when type is mention."
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Text content when type is text."
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "Input item type: text, image, local_image, skill, or mention."
+                  }
+                }
+              }
+            },
+            "message": {
+              "type": "string",
+              "description": "Legacy plain-text message to send to the agent. Use either message or items."
+            },
+            "target": {
+              "type": "string",
+              "description": "Agent id to message (from spawn_agent)."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Send a message to an existing agent. Use interrupt=true to redirect work immediately. You should reuse the agent by send_input if you believe your assigned task is highly dependent on the context of a previous task."
+      },
+      {
+        "name": "resume_agent",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Agent id to resume."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Resume a previously closed agent by id so it can receive send_input and wait_agent calls."
+      },
+      {
+        "name": "wait_agent",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "targets": {
+              "type": "array",
+              "description": "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "Optional timeout in milliseconds. Defaults to \n[... omitted 9 chars ...]\nr longer waits (minutes) to avoid busy polling."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Wait for agents to reach a final status. Completed statuses may include the agent's final messag\n[... omitted 32 chars ...]\nes a final status, a notification message will be received containing the same completed status."
+      },
+      {
+        "name": "close_agent",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Agent id to close (from spawn_agent)."
+            }
+          }
+        },
+        "strict": false,
+        "type": "function",
+        "defer_loading": null,
+        "description": "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore."
+      },
+      {
+        "description": "Use `js` to run JavaScript in the persistent Node-backed kernel. When a skill or prompt says to\n[... omitted 905 chars ...]\nome over alternatives (such as Computer Use) unless the user explicitly mentions an alternative.",
+        "name": "mcp__node_repl__",
+        "tools": [
+          {
+            "name": "js",
+            "type": "function",
+            "defer_loading": null,
+            "description": "Run JavaScript in a persistent Node-backed kernel with top-level await. This is the JavaScript \n[... omitted 3529 chars ...]\nupt it. Prefer `nodeRepl.write(text)` for text output and `nodeRepl.emitImage(...)` for images.",
+            "parameters": {
+              "type": "object",
+              "required": [
+                "code"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "description": "JavaScript source to execute in the persisten\n[... omitted 152 chars ...]\n\")`, or `await nodeRepl.emitImage(pngBuffer)`."
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "description": "Optional execution timeout in milliseconds. Defaults to 30000 (30 seconds) when omitted."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Short user-facing description of what this cod\n[... omitted 26 chars ...]\nt package metadata` or `Render chart preview`."
+                }
+              }
+            },
+            "strict": false
+          },
+          {
+            "name": "js_add_node_module_dir",
+            "type": "function",
+            "defer_loading": null,
+            "description": "Add an absolute `node_modules` directory to the REPL-wide Node module search roots for future pa\n[... omitted 70 chars ...]\net`. Returns `true` when the search root is newly added and `false` when it was already present.",
+            "parameters": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Absolute path to a node_modules directory to add to Node package resolution."
+                }
+              }
+            },
+            "strict": false
+          },
+          {
+            "name": "js_reset",
+            "type": "function",
+            "defer_loading": null,
+            "description": "Reset the persistent JavaScript kernel and clear all bindings created by prior `js` calls. Use t\n[... omitted 34 chars ...]\nings, top-level `var` declarations, or fresh names cannot recover from conflicting declarations.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {}
+            },
+            "strict": false
+          }
+        ],
+        "type": "namespace"
+      }
+    ],
+    "top_p": 0.95,
+    "background": false,
+    "max_output_tokens": 4096,
+    "max_tool_calls": null,
+    "previous_response_id": null,
+    "prompt": null,
+    "reasoning": null,
+    "service_tier": "auto",
+    "status": "completed",
+    "text": null,
+    "top_logprobs": null,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 8660,
+      "input_tokens_details": {
+        "cached_tokens": 8640,
+        "input_tokens_per_turn": [],
+        "cached_tokens_per_turn": []
+      },
+      "output_tokens": 233,
+      "output_tokens_details": {
+        "reasoning_tokens": 0,
+        "tool_output_tokens": 0,
+        "output_tokens_per_turn": [],
+        "tool_output_tokens_per_turn": []
+      },
+      "total_tokens": 8893
+    },
+    "user": null,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "kv_transfer_params": null,
+    "input_messages": null,
+    "output_messages": null
+  },
+  "expected": {
+    "no_text_leaks": true,
+    "no_invalid_tool_calls": true,
+    "no_command_quality_issues": true,
+    "minimum_structured_argument_repairs": 1,
+    "minimum_text_tool_call_repairs": 0,
+    "expected_tool_calls": [
+      "shell"
+    ],
+    "expected_output_fragments": [
+      "\\\"Get-ChildItem -Path . | Measure-Object\\\""
+    ]
+  },
+  "observed_after_normalization": {
+    "structured_argument_repairs": [
+      {
+        "tool": "shell",
+        "before": {
+          "command": [
+            "Get-ChildItem -Path . | Measure-Object"
+          ],
+          "workdir": "C:\\Users\\example\\source\\repos\\glm-test"
+        },
+        "after": {
+          "command": [
+            "powershell.exe",
+            "-Command",
+            "Get-ChildItem -Path . | Measure-Object"
+          ],
+          "workdir": "C:\\Users\\example\\source\\repos\\glm-test"
+        }
+      }
+    ],
+    "text_leaks": [],
+    "command_quality_issues": []
+  }
+}

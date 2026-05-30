@@ -77,6 +77,7 @@ HOSTED_WEB_SEARCH_UNSUPPORTED_DIAGNOSTIC = (
     "Do not call web_search; use one bounded shell metadata request if shell is available, or proceed from the prompt."
 )
 TOOL_GUARDRAIL_MARKER = "Open Gate tool discipline:"
+CHANNEL_DELIMITER = "<channel|>"
 COMMON_UNAVAILABLE_TOOL_ALIASES = (
     "web_search",
     "browser",
@@ -1069,14 +1070,36 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
     stripped = 0
     invalid_calls: list[JsonObject] = []
     text_candidate_repairs: list[JsonObject] = []
+    channel_delimiter_repairs: list[JsonObject] = []
     seen_candidates: set[str] = set()
     seen_invalid: set[str] = set()
 
     for slot in text_slots:
-        report = analyze_text(slot.text, tools)
+        original_text = slot.text
+        channel_cleaned = clean_channel_delimited_assistant_text(original_text) if slot.allow_promotion else None
+        if channel_cleaned is not None:
+            channel_delimiter_repairs.append(
+                {
+                    "before_chars": len(original_text),
+                    "after": channel_cleaned,
+                }
+            )
+            slot.container[slot.key] = channel_cleaned
+        report = analyze_text(slot.container[slot.key], tools)
+        cleaned_text = report.cleaned_text
+        if (
+            channel_cleaned is not None
+            and report.tool_calls
+            and all(call.valid for call in report.tool_calls)
+            and all(call.source == "fenced_json" for call in report.tool_calls)
+            and not report.cleaned_text.strip()
+        ):
+            full_report = analyze_text(original_text, tools)
+            if full_report.cleaned_text.strip():
+                cleaned_text = full_report.cleaned_text
         if report.tool_calls or report.leaks:
             stripped += 1
-            slot.container[slot.key] = report.cleaned_text
+            slot.container[slot.key] = cleaned_text
         if not slot.allow_promotion:
             continue
         for call in report.tool_calls:
@@ -1138,6 +1161,7 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         "structured_argument_repairs": repairs,
         "web_tool_alias_repairs": web_tool_alias_repairs,
         "text_tool_call_repairs": text_candidate_repairs,
+        "channel_delimiter_text_repairs": channel_delimiter_repairs,
         "upstream_command_quality_issues": upstream_command_quality_issues,
         "normalized_command_quality_issues": normalized_command_quality_issues,
         "actionable_output_repair": actionable_output_repair,
@@ -1151,6 +1175,15 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         "promotion_block_reason": promotion_block_reason(original_request, existing_calls, promoted),
     }
     return normalized, normalization
+
+
+def clean_channel_delimited_assistant_text(text: str) -> str | None:
+    if CHANNEL_DELIMITER not in text:
+        return None
+    suffix = text.rsplit(CHANNEL_DELIMITER, 1)[1].strip()
+    if not suffix:
+        return None
+    return suffix
 
 
 def collect_response_text_slots(response: JsonObject) -> list[TextSlot]:

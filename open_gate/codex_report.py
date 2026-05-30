@@ -82,6 +82,7 @@ def summarize_capture(path: Path) -> JsonObject:
     returned_analysis = analyze_response(returned_response, tools)
     normalized_analysis = analyze_response(normalized_response, tools)
     stripped_text_items = int(normalization.get("stripped_text_items") or 0)
+    channel_delimiter_repairs = len(normalization.get("channel_delimiter_text_repairs") or [])
     text_tool_call_repairs = len(normalization.get("text_tool_call_repairs") or [])
     promoted_tool_calls = len(normalization.get("promoted_tool_calls") or [])
     command_quality_suppressed = normalization.get("command_quality_suppressed_structured_calls") or []
@@ -112,6 +113,7 @@ def summarize_capture(path: Path) -> JsonObject:
         "blocked_by_policy": "blocked by policy" in raw_text.lower(),
         "repairs": len(normalization.get("structured_argument_repairs") or []),
         "text_tool_call_repairs": text_tool_call_repairs,
+        "channel_delimiter_text_repairs": channel_delimiter_repairs,
         "stripped_text_items": stripped_text_items,
         "unrecoverable_stripped_tool_syntax": unrecoverable_stripped,
         "suppressed_structured_calls": len(normalization.get("suppressed_structured_calls") or []),
@@ -223,6 +225,7 @@ def summarize(captures: list[JsonObject], codex_runs: list[JsonObject]) -> JsonO
         "max_proxy_duration_seconds": round(max(durations), 3) if durations else 0.0,
         "structured_argument_repairs": sum(int(item.get("repairs") or 0) for item in captures),
         "text_tool_call_repairs": sum(int(item.get("text_tool_call_repairs") or 0) for item in captures),
+        "channel_delimiter_text_repairs": sum(int(item.get("channel_delimiter_text_repairs") or 0) for item in captures),
         "stripped_text_items": sum(int(item.get("stripped_text_items") or 0) for item in captures),
         "unrecoverable_stripped_tool_syntax": sum(
             int(item.get("unrecoverable_stripped_tool_syntax") or 0) for item in captures

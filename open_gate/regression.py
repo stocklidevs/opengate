@@ -106,6 +106,13 @@ def fixture_failures(result: JsonObject, expected: JsonObject) -> list[str]:
     if actual_text_repairs < minimum_text_repairs:
         failures.append(f"expected at least {minimum_text_repairs} text tool-call repair(s), got {actual_text_repairs}")
 
+    minimum_channel_repairs = int(expected.get("minimum_channel_delimiter_text_repairs") or 0)
+    actual_channel_repairs = len(result["normalization"].get("channel_delimiter_text_repairs") or [])
+    if actual_channel_repairs < minimum_channel_repairs:
+        failures.append(
+            f"expected at least {minimum_channel_repairs} channel delimiter text repair(s), got {actual_channel_repairs}"
+        )
+
     minimum_command_quality_suppressed = int(expected.get("minimum_command_quality_suppressed_structured_calls") or 0)
     actual_command_quality_suppressed = len(result["normalization"].get("command_quality_suppressed_structured_calls") or [])
     if actual_command_quality_suppressed < minimum_command_quality_suppressed:
@@ -148,6 +155,9 @@ def fixture_failures(result: JsonObject, expected: JsonObject) -> list[str]:
     for fragment in expected.get("expected_output_fragments") or []:
         if str(fragment) not in text:
             failures.append(f"missing expected normalized output fragment: {fragment}")
+    for fragment in expected.get("expected_absent_fragments") or []:
+        if str(fragment) in text:
+            failures.append(f"unexpected normalized output fragment remained: {fragment}")
     return failures
 
 

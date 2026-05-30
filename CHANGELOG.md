@@ -8,6 +8,14 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.6.20 - 2026-05-30
+
+- Added the Gemma-4-E4B-IT adaptation results, including direct baselines, OpenGate repair scores, capture-backed repairs, and a clean live Codex smoke gate.
+- Added a generic `<channel|>` assistant-text cleanup that keeps the final non-empty suffix and records `channel_delimiter_text_repairs` telemetry, so Gemma-style visible answer prefaces do not leak into Codex-visible final text.
+- Extended Gemma-backed parser and command-quality coverage for fenced JSON `toolSpec` wrappers, pipe-style unavailable skill calls, Codex transcript-imitation tool-call blocks, one-item PowerShell script arrays, direct PowerShell aliases/cmdlets with path arguments, and malformed escaped JSON-tail command arrays.
+- Extended live Codex reporting and regression fixtures to track channel-delimiter text repairs and assert that repaired output fragments are absent when expected.
+- Recorded the larger Gemma software-build load as not passed and parked Gemma for Codex use beyond smoke: after parser repairs, the foreground run hit upstream timeout/connection-reset failures, executed no commands, and produced no artifacts.
+
 ## 0.6.18 - 2026-05-29
 
 - Added the DeepSeek-Coder-V2-Lite adaptation results: direct baseline, OpenGate repair scores, live smoke evidence, and a cross-model scorecard entry that parks the model as behavior-limited rather than known-good.

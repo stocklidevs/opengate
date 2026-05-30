@@ -21,8 +21,10 @@ The leakage parser recognizes:
 
 - XML-ish `<tool_call>` and `<tool_calls>` blocks, including GLM `<arg_key>/<arg_value>` payloads.
 - DeepSeek/vLLM delimited function blocks, including partial close/output marker stripping when a safe tool name cannot be recovered.
+- Gemma/vLLM pipe-style `<|tool_call>call:name{...}<tool_call|>` text.
 - Bare `recipient_name=functions.*` response headers.
-- Fenced or raw JSON tool-call objects and arrays when they parse cleanly.
+- Fenced or raw JSON tool-call objects and arrays when they parse cleanly, including wrapper objects shaped as `toolSpec.name` plus `toolSpec.args`.
+- Codex transcript-imitation blocks such as `assistant tool call shell ...` followed by JSON arguments; fabricated `tool output` text is stripped rather than trusted.
 - Pythonic `functions.tool({...})` text.
 
 The linter currently reports:
@@ -45,6 +47,7 @@ The linter currently reports:
 - OpenGate `0.6.17` keeps diagnostics generic by default and prefers a safe `shell` observation over `update_plan` when shell is available, avoiding task-specific artifact steering in normal proxy mode.
 - OpenGate also treats JSON `function.parameters` as tool arguments when `function.arguments` is absent, matching DeepSeek/vLLM text-tool-call captures without adding model-name branches.
 - Bare PowerShell aliases such as `dir`, `ls`, and `type` use the same repair path as direct cmdlets, so Codex receives `powershell.exe -Command ...` instead of trying to execute the alias as a program.
+- Single-item PowerShell script arrays such as `["Get-ChildItem -Path . | Measure-Object"]` use the same direct-cmdlet repair path and are wrapped as `powershell.exe -Command <script>` without adding literal quotes around the script.
 - `python_compound_statement_one_liner`: `python -c` with compound statements such as `async def` packed after semicolons.
 - `uv_run_playwright_entrypoint`: `uv run playwright ...` before the Playwright console script is known to exist.
 - `unbounded_web_fetch`: full-page web fetches that print whole HTML content into the model context.
@@ -61,6 +64,7 @@ Proxy captures include command-quality telemetry in `normalization`:
 - `upstream_command_quality_issues`: issues found before Open Gate repair.
 - `normalized_command_quality_issues`: issues that remain after repair/promotion.
 - `text_tool_call_repairs`: leaked text tool calls whose arguments were repaired before promotion.
+- `channel_delimiter_text_repairs`: assistant message text where OpenGate kept only the final non-empty suffix after `<channel|>`.
 - `command_quality_suppressed_structured_calls`: structured calls removed because error-level command-quality issues remained after repair.
 
 Repair mode may fix safe command-shape problems such as nested PowerShell, split PowerShell command arrays, bare PowerShell cmdlets or aliases, or JSON-array encoded PowerShell. Empty artifact writes and leaked shell calls with unrepaired command-quality errors are quarantined into harmless diagnostics so Codex receives feedback and can continue the normal loop without running the bad command. Diagnostic quarantines are deliberately minimal and do not preserve approval metadata from the blocked call. Hosted `web_search` calls are routed to bounded shell metadata fetches when a URL can be derived. Structured calls with remaining error-level issues are suppressed before Codex can execute them; Open Gate returns a short generic diagnostic instead of the bad tool call. It does not rewrite risky shell semantics such as replacing `&&` with `;`.

@@ -74,6 +74,7 @@ Current model notes:
 - `docs\qwen3-coder-next.md` records the first known-good Qwen3-Coder-Next setup.
 - `docs\qwen3-6-27b.md` prepares Qwen3.6-27B setup, benchmark commands, and result placeholders.
 - `docs\deepseek-coder-v2-lite.md` records DeepSeek-Coder-V2-Lite setup, repaired synthetic/live protocol status, and the parked behavior-limited decision.
+- `docs\gemma-4-e4b-it.md` records Gemma-4-E4B-IT setup, repair evidence, and the current live-smoke-clean decision.
 - `docs\benchmark-notes.md` contains the cross-model adaptation scorecard.
 
 ## 9. Version And Evidence

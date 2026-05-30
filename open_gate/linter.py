@@ -81,12 +81,28 @@ BARE_RECIPIENT_RE = re.compile(
     r"^\s*recipient_name\s*=\s*(?P<name>[A-Za-z0-9_.:-]+)\s*(?P<body>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
-FENCED_JSON_RE = re.compile(r"```(?:json|tool_code|tool_call)?\s*(?P<body>.*?)\s*```", re.IGNORECASE | re.DOTALL)
+FENCED_JSON_RE = re.compile(
+    r"(?:^[ \t]*|<channel\|>\s*)```(?:json|tool_code|tool_call)?[ \t]*(?:\r?\n)(?P<body>.*?)^[ \t]*```",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
 PY_CALL_RE = re.compile(r"(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*\(")
 RECIPIENT_ASSIGN_RE = re.compile(r"\brecipient_name\s*=\s*functions\.[A-Za-z0-9_.:-]+\b", re.IGNORECASE)
 TO_FUNCTIONS_ASSIGN_RE = re.compile(r"\bto\s*=\s*functions\.[A-Za-z0-9_.:-]+\b", re.IGNORECASE)
 FUNCTION_NAMESPACE_CALL_RE = re.compile(r"\b(?:functions|tools)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.IGNORECASE)
 TOOL_CALL_LITERAL_RE = re.compile(r"</?tool_calls?>", re.IGNORECASE)
+GEMMA_PIPE_TOOL_MARKER_RE = re.compile(r"<\|tool_calls?>|<tool_calls?\|>", re.IGNORECASE)
+GEMMA_PIPE_TOOL_CALL_RE = re.compile(
+    r"<\|tool_call>\s*call:(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*(?P<body>\{.*?\})\s*<tool_call\|>",
+    re.IGNORECASE | re.DOTALL,
+)
+CODEX_TRANSCRIPT_TOOL_CALL_HEADER_RE = re.compile(
+    r"assistant\s+tool\s+call\s+(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)(?:\s+[^\r\n:]*)?:\s*",
+    re.IGNORECASE,
+)
+CODEX_TRANSCRIPT_TOOL_OUTPUT_HEADER_RE = re.compile(
+    r"\s*tool\s+output\s+[^\r\n:]*:\s*",
+    re.IGNORECASE,
+)
 DEEPSEEK_TOOL_MARKER = r"<\uff5ctool\u2581(?:call|calls|output|outputs)\u2581(?:begin|end)\uff5c>|<\uff5ctool\u2581sep\uff5c>"
 DEEPSEEK_TOOL_MARKER_RE = re.compile(DEEPSEEK_TOOL_MARKER, re.DOTALL)
 DEEPSEEK_TOOL_OUTPUTS_RE = re.compile(
@@ -111,9 +127,11 @@ DEEPSEEK_TOOL_CALL_RE = re.compile(
 )
 SUSPICIOUS_PATTERNS = {
     "tool_call_tag": TOOL_CALL_LITERAL_RE,
+    "gemma_pipe_tool_marker": GEMMA_PIPE_TOOL_MARKER_RE,
     "function_tag": re.compile(r"<function=", re.IGNORECASE),
     "responses_recipient": re.compile(r"\brecipient_name\b|\bto=functions\.", re.IGNORECASE),
     "tool_namespace": re.compile(r"\b(?:functions|tools)\.[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE),
+    "codex_transcript_tool_call": CODEX_TRANSCRIPT_TOOL_CALL_HEADER_RE,
     "deepseek_v3_tool_marker": DEEPSEEK_TOOL_MARKER_RE,
 }
 
@@ -156,6 +174,14 @@ def analyze_text(text: str, tools: list[JsonObject] | JsonObject | None = None) 
     calls: list[ToolCall] = []
     errors: list[str] = []
     suspicious_spans: list[tuple[int, int]] = []
+
+    for match in GEMMA_PIPE_TOOL_CALL_RE.finditer(text):
+        suspicious_spans.append(match.span())
+        calls.append(_call_from_gemma_pipe_tool_call(match))
+
+    for call in _extract_codex_transcript_tool_calls(text):
+        suspicious_spans.append(call.span)
+        calls.append(call)
 
     for match in DEEPSEEK_TOOL_CALL_RE.finditer(text):
         suspicious_spans.append(match.span())
@@ -264,6 +290,7 @@ def _contains_raw_tool_syntax(payload: str) -> bool:
 def _sanitize_residual_tool_syntax(text: str) -> str:
     cleaned = RESPONSE_TAG_LITERAL_RE.sub("", text)
     cleaned = TOOL_CALL_LITERAL_RE.sub("tool call", cleaned)
+    cleaned = GEMMA_PIPE_TOOL_MARKER_RE.sub("tool call", cleaned)
     cleaned = RECIPIENT_ASSIGN_RE.sub("", cleaned)
     cleaned = TO_FUNCTIONS_ASSIGN_RE.sub("", cleaned)
     cleaned = re.sub(r"\brecipient_name\b", "recipient name", cleaned, flags=re.IGNORECASE)
@@ -299,6 +326,81 @@ def _calls_from_glm_tool_call(payload: str, outer_span: tuple[int, int]) -> list
     if not args:
         return []
     return [ToolCall(name=name, arguments=args, source="glm_tool_call_tag", span=outer_span, raw=payload)]
+
+
+def _call_from_gemma_pipe_tool_call(match: re.Match[str]) -> ToolCall:
+    return ToolCall(
+        name=match.group("name"),
+        arguments=_gemma_pipe_tool_call_arguments(match.group("body")),
+        source="gemma_pipe_tool_call",
+        span=match.span(),
+        raw=match.group(0),
+    )
+
+
+def _gemma_pipe_tool_call_arguments(body: str) -> JsonObject:
+    normalized = body.replace('<|"|>', '"')
+    parsed = _json_loads_relaxed(normalized)
+    if isinstance(parsed, dict):
+        return parsed
+    quoted_keys = re.sub(r'([,{]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:', r'\1"\2":', normalized)
+    parsed = _json_loads_relaxed(quoted_keys)
+    if isinstance(parsed, dict):
+        return parsed
+    return {"value": body.strip()}
+
+
+def _extract_codex_transcript_tool_calls(text: str) -> list[ToolCall]:
+    calls: list[ToolCall] = []
+    decoder = json.JSONDecoder()
+    for match in CODEX_TRANSCRIPT_TOOL_CALL_HEADER_RE.finditer(text):
+        body_start = _skip_whitespace(text, match.end())
+        if body_start >= len(text) or text[body_start] not in "{[":
+            continue
+        try:
+            parsed, offset = decoder.raw_decode(text[body_start:])
+        except json.JSONDecodeError:
+            continue
+
+        body_end = body_start + offset
+        span_end = body_end
+        output_match = CODEX_TRANSCRIPT_TOOL_OUTPUT_HEADER_RE.match(text, body_end)
+        if output_match:
+            output_start = _skip_whitespace(text, output_match.end())
+            if output_start < len(text) and text[output_start] in "{[":
+                try:
+                    _, output_offset = decoder.raw_decode(text[output_start:])
+                    span_end = output_start + output_offset
+                except json.JSONDecodeError:
+                    span_end = output_match.end()
+            else:
+                span_end = output_match.end()
+
+        if isinstance(parsed, dict):
+            args = parsed
+        elif isinstance(parsed, list):
+            args = {"command": parsed}
+        else:
+            args = {"value": parsed}
+        name = match.group("name")
+        if name.startswith("functions."):
+            name = name.split(".", 1)[1]
+        calls.append(
+            ToolCall(
+                name=name,
+                arguments=args,
+                source="codex_transcript_tool_call",
+                span=(match.start(), span_end),
+                raw=text[match.start() : span_end],
+            )
+        )
+    return calls
+
+
+def _skip_whitespace(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _calls_from_deepseek_tool_call(match: re.Match[str]) -> list[ToolCall]:
@@ -345,6 +447,10 @@ def _iter_tool_call_objects(value: Any) -> list[JsonObject]:
         return _iter_tool_call_objects(value["tool_calls"])
     if isinstance(value.get("calls"), list):
         return _iter_tool_call_objects(value["calls"])
+    if isinstance(value.get("toolSpec"), dict):
+        return _iter_tool_call_objects(value["toolSpec"])
+    if isinstance(value.get("tool_spec"), dict):
+        return _iter_tool_call_objects(value["tool_spec"])
     if isinstance(value.get("function"), dict):
         return [value]
     if any(key in value for key in ("name", "tool", "tool_name", "recipient_name")):

@@ -64,6 +64,7 @@ class CodexReportTests(unittest.TestCase):
                         "normalization": {
                             "mode": "repair",
                             "structured_argument_repairs": [{"tool": "shell"}],
+                            "channel_delimiter_text_repairs": [{"before_chars": 30, "after": "ok"}],
                             "stripped_text_items": 0,
                         },
                         "response": {
@@ -102,6 +103,7 @@ class CodexReportTests(unittest.TestCase):
         self.assertEqual(report["summary"]["stream_heartbeats"], 2)
         self.assertEqual(report["summary"]["max_proxy_duration_seconds"], 12.5)
         self.assertEqual(report["summary"]["structured_argument_repairs"], 1)
+        self.assertEqual(report["summary"]["channel_delimiter_text_repairs"], 1)
         self.assertEqual(report["summary"]["returned_command_quality_issues"], 0)
         self.assertEqual(report["summary"]["codex_turns_completed"], 1)
 

@@ -59,10 +59,12 @@ def build_fixture(capture_path: Path, name: str | None = None, full_request: boo
             "no_command_quality_issues": True,
             "minimum_structured_argument_repairs": len(normalization.get("structured_argument_repairs") or []),
             "minimum_text_tool_call_repairs": len(normalization.get("text_tool_call_repairs") or []),
+            "minimum_channel_delimiter_text_repairs": len(normalization.get("channel_delimiter_text_repairs") or []),
             "expected_tool_calls": [call.name for call in collect_responses_tool_calls(normalized)],
         },
         "observed_after_normalization": {
             "structured_argument_repairs": normalization.get("structured_argument_repairs") or [],
+            "channel_delimiter_text_repairs": normalization.get("channel_delimiter_text_repairs") or [],
             "text_leaks": text_report.leaks,
             "command_quality_issues": command_quality_issues,
         },

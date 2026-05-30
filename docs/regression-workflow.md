@@ -16,7 +16,7 @@ Fixtures are written to `fixtures\regressions\`. Each fixture contains:
 
 - `request`: the minimal request context needed by normalization.
 - `upstream_response`: the raw model response to replay.
-- `expected`: assertions such as no text leaks, no invalid tool calls, no command quality issues, and minimum repair count.
+- `expected`: assertions such as no text leaks, no invalid tool calls, no command quality issues, expected or absent output fragments, and minimum repair counts.
 - `observed_after_normalization`: the normalized behavior observed when the fixture was created.
 
 ## Replay Fixtures

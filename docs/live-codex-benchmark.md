@@ -74,6 +74,7 @@ python -m open_gate.codex_report runs\codex-live\<run-id>\captures --codex-dir r
 - `upstream_command_quality_issues`: raw model command-shape problems.
 - `returned_command_quality_issues`: command-shape problems after Open Gate mode is applied.
 - `structured_argument_repairs`: repairs Open Gate applied or would apply.
+- `channel_delimiter_text_repairs`: assistant final-answer prefaces removed by keeping the suffix after a final non-empty `<channel|>` marker.
 - `average_proxy_duration_seconds` and `max_proxy_duration_seconds`: upstream wait plus normalization time from proxy captures.
 - `stream_heartbeats`: Responses heartbeat events sent while Codex waited for buffered upstream responses.
 - `returned_clean_capture_rate`: captures with no returned leaks, invalid calls, command-quality issues, or policy block markers.
@@ -104,6 +105,46 @@ Open Gate `0.6.6` changes the stream keepalive path to real Responses heartbeat 
 - `habit_tracker_web`: build and verify a single-file localStorage habit tracker.
 
 The suite is intentionally write-heavy. It is designed to test whether the model can make progress through Codex's real tool loop, not just whether Open Gate can hide leaked tool syntax.
+
+## 2026-05-29 Gemma-4-E4B-IT Smoke
+
+Run folder: `runs\codex-live\20260529-201419-gemma4_e4b_it_live_smoke_workspace_0619_channel_filter-repair`
+
+Summary:
+
+| Metric | Value |
+| --- | ---: |
+| Codex turns completed | 3/3 |
+| Upstream errors | 0 |
+| Returned text leaks | 0 |
+| Returned invalid tool calls | 0 |
+| Returned command-quality issues | 0 |
+| Structured argument repairs | 1 |
+| Channel delimiter text repairs | 3 |
+| Codex command executions | 1 |
+| Returned clean capture rate | 100% |
+
+Interpretation: Gemma reached meaningful Codex generation and completed the smoke suite after generic parser, command-quality, and channel-delimiter final-answer repairs. The final visible messages no longer include the pre-answer analysis or `<channel|>` marker. This is a smoke-clean result, not a broad build-workload certification.
+
+## 2026-05-29 Gemma-4-E4B-IT Software-Build Load
+
+Run folder: `runs\codex-live\20260529-210308-gemma4_e4b_it_software_build_0619_transcript_repair_fg-repair`
+
+Summary:
+
+| Metric | Value |
+| --- | ---: |
+| Codex turns completed | 1/3 |
+| Upstream errors | 3 |
+| Timed-out cases | 2/3 |
+| Returned text leaks | 0 |
+| Returned invalid tool calls | 0 |
+| Returned command-quality issues | 0 |
+| Codex command executions | 0 |
+| Generated workspace artifacts | 0 |
+| Returned clean capture rate | 100% |
+
+Interpretation: this larger write-heavy gate did not pass. OpenGate kept returned responses clean after the pipe-style skill-call and transcript-imitation parser repairs, but Gemma/vLLM did not sustain the live build loop: two CLI cases timed out, the web case returned only an upstream connection-reset message, and no requested files were created. For Codex use, Gemma is therefore parked as not reliably usable beyond smoke; remaining failures are model/runtime behavior, not OpenGate repair targets.
 
 ## 2026-05-10 GLM Software-Build Attempt
 

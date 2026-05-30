@@ -106,6 +106,40 @@ class LinterTests(unittest.TestCase):
         self.assertTrue(report.tool_calls[0].valid)
         self.assertEqual(report.cleaned_text, "")
 
+    def test_gemma_pipe_tool_call_is_extracted_and_cleaned(self) -> None:
+        report = analyze_text(
+            '<|tool_call>call:superpowers:brainstorming{message:<|"|>Plan the implementation.<|"|>}<tool_call|>',
+            TOOLS,
+        )
+
+        self.assertEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "superpowers:brainstorming")
+        self.assertEqual(report.tool_calls[0].source, "gemma_pipe_tool_call")
+        self.assertFalse(report.tool_calls[0].valid)
+        self.assertIn("Unknown tool: superpowers:brainstorming", report.tool_calls[0].errors)
+        self.assertEqual(report.cleaned_text, "")
+        self.assertIn("parsed_tool_call", report.leaks)
+
+    def test_codex_transcript_tool_call_is_extracted_and_cleaned(self) -> None:
+        report = analyze_text(
+            "assistant tool call shell chatcmpl-tool-8e5c932fb4903995:\n"
+            '{"command":["powershell.exe","-Command","Write-Output \'{row} ${total:,.2f}\'"]}\n\n'
+            "tool output chatcmpl-tool-8e5c932fb4903995:\n"
+            '{"output":"","metadata":{"exit_code":0,"duration_seconds":0.4}}',
+            TOOLS,
+        )
+
+        self.assertEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "shell")
+        self.assertEqual(report.tool_calls[0].source, "codex_transcript_tool_call")
+        self.assertEqual(
+            report.tool_calls[0].arguments["command"],
+            ["powershell.exe", "-Command", "Write-Output '{row} ${total:,.2f}'"],
+        )
+        self.assertEqual(report.cleaned_text, "")
+        self.assertIn("parsed_tool_call", report.leaks)
+        self.assertIn("codex_transcript_tool_call", report.leaks)
+
     def test_deepseek_v3_delimited_tool_call_is_extracted_and_cleaned(self) -> None:
         tools = [
             {
@@ -190,6 +224,41 @@ class LinterTests(unittest.TestCase):
             report.tool_calls[0].arguments["command"],
             ["powershell.exe", "-Command", "Get-Content forest-scene.html -TotalCount 1"],
         )
+        self.assertTrue(report.tool_calls[0].valid)
+
+    def test_tool_spec_wrapper_becomes_tool_call(self) -> None:
+        tools = [
+            {
+                "type": "function",
+                "name": "shell",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "array", "items": {"type": "string"}},
+                        "workdir": {"type": "string"},
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        report = analyze_text(
+            "Before running it, place the tool call in a fenced ```json block for inspection.\n\n"
+            "```json\n"
+            '{"toolSpec":{"name":"shell","args":{"command":["powershell.exe","-Command","Get-Location"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}}}\n'
+            "```<channel|>```json\n"
+            '{"toolSpec":{"name":"shell","args":{"command":["powershell.exe","-Command","Get-Location"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"}}}\n'
+            "```",
+            tools,
+        )
+
+        self.assertGreaterEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "shell")
+        self.assertEqual(report.tool_calls[0].source, "fenced_json")
+        self.assertEqual(report.tool_calls[0].arguments["command"], ["powershell.exe", "-Command", "Get-Location"])
+        self.assertNotIn("toolSpec", report.cleaned_text)
+        self.assertNotIn("<channel|>", report.cleaned_text)
+        self.assertIn("parsed_tool_call", report.leaks)
         self.assertTrue(report.tool_calls[0].valid)
 
     def test_type_only_hosted_tool_is_available(self) -> None:

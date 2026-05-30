@@ -80,6 +80,36 @@ class CommandQualityTests(unittest.TestCase):
         self.assertIn("direct_powershell_cmdlet", {issue["issue"] for issue in issues})
         self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "Write-Host loading"])
 
+    def test_repairs_single_direct_powershell_pipeline_without_literal_quotes(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": ["Get-ChildItem | Measure-Object -Line"]},
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments(call.arguments)
+
+        self.assertIn("direct_powershell_cmdlet", {issue["issue"] for issue in issues})
+        self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "Get-ChildItem | Measure-Object -Line"])
+
+    def test_repairs_single_direct_powershell_script_with_dot_path_argument(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={"command": ["Get-ChildItem -Path . | Measure-Object"]},
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+        repaired = repair_shell_arguments(call.arguments)
+
+        self.assertIn("direct_powershell_cmdlet", {issue["issue"] for issue in issues})
+        self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "Get-ChildItem -Path . | Measure-Object"])
+
     def test_repairs_direct_powershell_alias_arguments(self) -> None:
         call = ToolCall(
             name="shell",
@@ -458,6 +488,23 @@ class CommandQualityTests(unittest.TestCase):
         issues = inspect_tool_calls([call])
 
         self.assertIn("malformed_json_array_command", {issue["issue"] for issue in issues})
+
+    def test_detects_escaped_json_tail_in_command_array_item(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    'powershell.exe","-Command","\'(Get-ChildItem).Count\'"],"workdir":"C:\\\\Users\\\\example\\\\source\\\\repos\\\\glm-test"'
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("malformed_embedded_json_command_array", {issue["issue"] for issue in issues})
 
     def test_repairs_bash_heredoc_for_powershell(self) -> None:
         repaired = repair_shell_arguments(

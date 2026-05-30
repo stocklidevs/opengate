@@ -6,6 +6,7 @@ Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
 - GLM-4.7-Flash checked on 2026-05-10.
 - Qwen3.6-27B basic smoke checked on 2026-05-11 UTC, 2026-05-10 America/New_York.
 - DeepSeek-Coder-V2-Lite-Instruct checked on 2026-05-28.
+- Gemma-4-E4B-IT checked on 2026-05-29.
 
 ## Suites
 
@@ -82,13 +83,16 @@ These are direct vLLM results before Open Gate repairs. Run counts differ becaus
 | `codex_shell_smoke` | Qwen3.6-27B | 3 | 9/9, 100% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% |
 | `codex_shell_smoke` | GLM-4.7-Flash | 3 | 0/9, 0% | 6/9, 66.67% | 0/9, 0% | 9/9, 100% | 0/9, 0% | 0/9, 0% |
 | `codex_shell_smoke` | DeepSeek-Coder-V2-Lite-Instruct | 3 | 0/9, 0% | 0/9, 0% | 0/9, 0% | 9/9, 100% | 0/9, 0% | 0/9, 0% |
+| `codex_shell_smoke` | Gemma-4-E4B-IT | 3 | 9/9, 100% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% | 0/9, 0% |
 | `codex_tool_leak_stress` | Qwen3-Coder-Next | 1 | 3/4, 75% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% | 0/4, 0% |
 | `codex_tool_leak_stress` | GLM-4.7-Flash | 3 | 0/12, 0% | 12/12, 100% | 1/12, 8.33% | 12/12, 100% | 0/12, 0% | 0/12, 0% |
 | `codex_tool_leak_stress` | DeepSeek-Coder-V2-Lite-Instruct | 3 | 0/12, 0% | 6/12, 50% | 0/12, 0% | 9/12, 75% | 0/12, 0% | 0/12, 0% |
+| `codex_tool_leak_stress` | Gemma-4-E4B-IT | 3 | 0/12, 0% | 12/12, 100% | 0/12, 0% | 0/12, 0% | 0/12, 0% | 0/12, 0% |
 | `qwen_serious_tool_stress` | Qwen3-Coder-Next | 3 | 43/60, 71.67% | 10/60, 16.67% | 0/60, 0% | not recorded | 4/60, 6.67% | 0/60, 0% |
 | `qwen_serious_tool_stress` | Qwen3.6-27B | 1 | 0/20, 0% | 0/20, 0% | 0/20, 0% | 15/20, 75% | 0/20, 0% | 20/20, 100% |
 | `qwen_serious_tool_stress` | GLM-4.7-Flash | 1 | 2/20, 10% | 17/20, 85% | 5/20, 25% | 15/20, 75% | 1/20, 5% | 0/20, 0% |
 | `qwen_serious_tool_stress` | DeepSeek-Coder-V2-Lite-Instruct | 3 | 9/60, 15% | 18/60, 30% | 0/60, 0% | 45/60, 75% | 9/60, 15% | 0/60, 0% |
+| `qwen_serious_tool_stress` | Gemma-4-E4B-IT | 3 | 27/60, 45% | 33/60, 55% | 0/60, 0% | 4/60, 6.67% | 8/60, 13.33% | 0/60, 0% |
 
 ## Model Adaptation Scorecard
 
@@ -100,6 +104,42 @@ This table records the practical Codex-backend status after each model's baselin
 | GLM-4.7-Flash | `2/20` serious strict successes | `20/20` repair/full, `19/20` repair/spoon | Synthetic repair validated | Keep as repaired for the GLM leak dialect |
 | Qwen3.6-27B | `9/9` direct smoke, but `0/20` direct serious due to protocol errors | `14/17` derived strict successes on partial repair/spoon | Parked after live task-progress/runtime failures | Do not optimize further until a clean proxy-layer failure appears |
 | DeepSeek-Coder-V2-Lite-Instruct | `9/60` serious strict successes | `48/60` repair/full, `17/20` repair/spoon | Protocol-clean latest smoke, but behavior-limited | Parked: leaks/protocol are repaired, but the model does not behave reliably enough for Codex; do not repair model behavior |
+| Gemma-4-E4B-IT | `27/60` serious strict successes | `19/20` post-repair repair/full and `19/20` post-repair repair/spoon | Smoke completed 3/3 cleanly, but software-build load later failed with upstream timeouts/connection resets and no artifacts | Parked: not usable reliably with Codex beyond smoke; do not repair model behavior |
+
+## Gemma-4-E4B-IT Synthetic Repair Baseline
+
+`Gemma-4-E4B-IT` was served from `google/gemma-4-E4B-it` with vLLM `0.20.1`, `max_model_len` 16384, `--tool-call-parser gemma4`, the Gemma 4 tool chat template, and `--performance-mode interactivity`. Full setup and triage are in `docs\gemma-4-e4b-it.md`.
+
+OpenGate comparison on `qwen_serious_tool_stress`:
+
+| Mode | Context Policy | Strict Success | Text Leaks | Missed Tool Calls | Invalid Tool Calls | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| direct vLLM | n/a | 27/60, 45% | 33/60, 55% | 4/60, 6.67% | 8/60, 13.33% | Protocol-clean raw endpoint; ordinary tool calls are good, bait/schema pressure leaks are common |
+| OpenGate `observe` | `full` | 9/20, 45% | 11/20, 55% | 1/20, 5% | 1/20, 5% | Raw output preserved while normalization evidence is recorded |
+| OpenGate `repair` before `toolSpec` parser | `full` | 57/60, 95% | 0/60, 0% | 3/60, 5% | 0/60, 0% | Existing repairs removed the main raw leaks and invalid calls |
+| OpenGate `repair` before `toolSpec` parser | `spoon` | 18/20, 90% | 0/20, 0% | 2/20, 10% | 0/20, 0% | Revealed duplicated fenced JSON `toolSpec` text after a channel marker |
+| OpenGate `repair` after `toolSpec` parser | `full` | 19/20, 95% | 0/20, 0% | 1/20, 5% | 0/20, 0% | Post-repair r1 spot check |
+| OpenGate `repair` after `toolSpec` parser | `spoon` | 19/20, 95% | 0/20, 0% | 1/20, 5% | 0/20, 0% | Post-repair r1 spot check |
+
+The accepted repairs are model-agnostic: parse fenced JSON objects shaped as `toolSpec.name` plus `toolSpec.args`, treat fences immediately after `<channel|>` as leaked tool-call blocks, detect Gemma pipe-style `<|tool_call>call:...<tool_call|>` text, and promote Codex transcript-style `assistant tool call ...` JSON command blocks while stripping fabricated `tool output` text. They are covered by `fixtures\regressions\gemma4_toolspec_wrapper_20260529.json`, `fixtures\regressions\gemma4_pipe_skill_call_20260529.json`, and `fixtures\regressions\gemma4_codex_transcript_tool_call_20260529.json`.
+
+Remaining synthetic failures are missed tool calls under invalid-extra-argument schema pressure. They are behavior/schema-pressure misses, not Codex-visible leaks, invalid returned calls, command-quality issues, HTTP errors, or protocol blockers.
+
+Live Codex smoke after the accepted command-quality and channel-delimiter repairs:
+
+| Run | Codex Turns | Upstream Errors | Returned Leaks | Returned Invalid Calls | Returned Command-Quality Issues | Channel Repairs | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `runs\codex-live\20260529-201419-gemma4_e4b_it_live_smoke_workspace_0619_channel_filter-repair` | 3/3 | 0 | 0 | 0 | 0 | 3 | known-good for the current smoke gate |
+
+The channel repair is deliberately narrow: assistant text is reduced to the suffix after the final `<channel|>` marker only when that suffix is non-empty. It does not strip reasoning items or arbitrary planning prose.
+
+Broader software-build load after the pipe/transcript parser repairs:
+
+| Run | Codex Turns | Upstream Errors | Timed-Out Cases | Command Executions | Generated Artifacts | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `runs\codex-live\20260529-210308-gemma4_e4b_it_software_build_0619_transcript_repair_fg-repair` | 1/3 | 3 | 2/3 | 0 | 0 | failed larger build gate |
+
+Interpretation: the repair layer kept returned captures leak-clean, but the larger live run did not produce usable Codex work. The two CLI cases timed out, the web case completed only with an upstream error message, and the target workspace remained empty. This is enough to park Gemma for Codex use: it can pass the small smoke, but it is not reliable for real Codex build workloads, and remaining failures are model/runtime behavior rather than OpenGate repair targets.
 
 ## DeepSeek-Coder-V2-Lite Synthetic Repair Baseline
 
