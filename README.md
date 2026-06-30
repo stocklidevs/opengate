@@ -8,7 +8,7 @@
   <strong>Make local open coding models behave inside Codex CLI.</strong>
 </p>
 
-![Version](https://img.shields.io/badge/version-0.6.20-blue)
+![Version](https://img.shields.io/badge/version-0.7.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-none-success)
 ![API](https://img.shields.io/badge/API-Responses-111827)
@@ -19,7 +19,7 @@ Open coding models served through vLLM often emit tool calls as plain text (XML,
 
 With repair in front of a capable model, that has been enough to take a local model from leaking tool syntax to **shipping working, independently verified apps** through Codex (see [App-Build Results](#app-build-results)).
 
-> Current release `0.6.20` · **zero runtime dependencies** (pure Python 3.11+ stdlib) · Windows-first. See `CHANGELOG.md` and `docs\release-process.md`.
+> Current release `0.7.0` · **zero runtime dependencies** (pure Python 3.11+ stdlib) · Windows-first. See `CHANGELOG.md` and `docs\release-process.md`.
 
 ## Quick Start
 
@@ -171,6 +171,7 @@ python -m open_gate `
 - `--context-policy` — `spoon` compacts older history and keeps recent turns exact; see `docs\context-policy.md`.
 - `--upstream-timeout` — give slower models time for large code-generation turns (default `420` s).
 - `--upstream-max-output-tokens` — cap one upstream generation (default `4096`, `0` disables). Raise it for large single-file builds.
+- `--write-file-tool` — inject a `write_file(path, content)` tool so the model writes files via JSON arguments instead of fragile shell here-strings; Open Gate translates each call into a robust base64 `shell` write before Codex sees it. Off by default; useful for local models that struggle writing large quote-heavy source files.
 - `--stream-heartbeat-seconds` — Responses heartbeat cadence for streamed requests (default `2.0`).
 
 Config precedence: `CLI flags > OPENGATE_CONFIG / local opengate.toml > built-in defaults`. Open Gate searches for `opengate.toml`, `open-gate.toml`, `.opengate.toml`, then `~\.opengate\config.toml`. Keep machine-specific endpoints in the ignored `opengate.toml`; commit nothing but `opengate.example.toml`. See `docs\upstream-capabilities.md` for capability probing and protocol adaptation.
@@ -314,6 +315,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_validation_loop.ps1 -
 - Every request is written to `captures/` with sensitive headers redacted.
 - `open_gate.linter` extracts leaked tool calls from XML tags, GLM `<arg_key>/<arg_value>` tags, DeepSeek/vLLM delimiter blocks, bare `recipient_name=functions.*` headers, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
 - `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex (executable-only calls, empty artifact writes, bare PowerShell cmdlets/aliases, split `-Command` arrays, nested PowerShell, Windows PowerShell `&&`, bad here-strings, malformed JSON-array scripts, fragile Python one-liners, full-page web fetches, non-image `view_image` paths).
+- With `--write-file-tool`, Open Gate injects an optional `write_file(path, content)` tool into the upstream request, advertises it in the guardrail, and translates each returned call into a robust base64 `shell` write — so local models can write files via JSON args while Codex still only sees `shell`.
 - `open_gate.regression` replays captured upstream responses through normalization as stable fixtures.
 - `open_gate.adversarial` fuzzes malformed GLM-style tag whitespace through the full proxy normalizer to catch leakage slips before live Codex runs.
 - `open_gate.codex_report` summarizes live Codex JSONL output and proxy captures.
@@ -324,7 +326,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_validation_loop.ps1 -
 
 ## Versioning
 
-Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.6.20`.
+Open Gate uses semantic versioning before `1.0`. Keep `VERSION`, `pyproject.toml`, and `open_gate\version.py` in sync. The current version is `0.7.0`.
 
 ## Roadmap
 

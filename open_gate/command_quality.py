@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 import json
 import re
@@ -1343,3 +1344,77 @@ def call_arguments(call: Any) -> JsonObject:
             return {"value": arguments}
         return parsed if isinstance(parsed, dict) else {"value": parsed}
     return {"value": arguments}
+
+
+# ---------------------------------------------------------------------------
+# write_file tool: give weak local models a structured file-write interface so
+# file content travels in JSON arguments instead of fragile shell here-strings.
+# Open Gate injects this tool upstream and translates each call into a robust
+# base64 shell write before Codex (which only knows `shell`) sees it.
+# ---------------------------------------------------------------------------
+
+WRITE_FILE_TOOL_NAME = "write_file"
+
+
+def write_file_tool_spec() -> JsonObject:
+    """The Responses-style function tool Open Gate injects upstream."""
+    return {
+        "type": "function",
+        "name": WRITE_FILE_TOOL_NAME,
+        "description": (
+            "Create or overwrite a file with exact content. Provide the full file "
+            "content as a plain string in 'content' - no shell escaping, quoting, or "
+            "here-strings are needed. Prefer this over shell for writing any file, "
+            "especially large or multi-line source files."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative path of the file to write."},
+                "content": {"type": "string", "description": "The complete file content, verbatim."},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def write_file_shell_command(path: str, content: str) -> list[str]:
+    """Build a shell command that writes `content` to `path` with no shell-quoting
+    exposure: the content is base64-encoded (safe charset) and decoded to bytes by
+    PowerShell, so quotes, newlines, and dollar signs in the content cannot be
+    misinterpreted. The only interpolated values are the base64 string and the
+    single-quote-escaped path."""
+    b64 = base64.b64encode(str(content).encode("utf-8")).decode("ascii")
+    safe_path = str(path).replace("'", "''")
+    script = (
+        f"$p='{safe_path}'; "
+        f"$d=[System.Convert]::FromBase64String('{b64}'); "
+        f"$dir=[System.IO.Path]::GetDirectoryName($p); "
+        f"if($dir){{[System.IO.Directory]::CreateDirectory($dir) | Out-Null}}; "
+        f"[System.IO.File]::WriteAllBytes($p,$d)"
+    )
+    return ["powershell.exe", "-NoProfile", "-Command", script]
+
+
+def translate_write_file_call(call: Any) -> JsonObject | None:
+    """If `call` is a structured `write_file` function-call item, return a copy
+    rewritten as an equivalent `shell` call (base64 write). Otherwise return None.
+    Preserves id/call_id so Codex tool-output matching still works."""
+    if not isinstance(call, dict):
+        return None
+    if call.get("name") != WRITE_FILE_TOOL_NAME:
+        return None
+    args = call_arguments(call)
+    path = args.get("path")
+    content = args.get("content")
+    if not isinstance(path, str) or not path or not isinstance(content, str):
+        return None
+    translated = dict(call)
+    translated["name"] = "shell"
+    translated["arguments"] = json.dumps(
+        {"command": write_file_shell_command(path, content)},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return translated

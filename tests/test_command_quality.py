@@ -2,13 +2,58 @@ from __future__ import annotations
 
 import unittest
 
+import base64
+import json
+
 from open_gate.command_quality import (
     inspect_tool_calls,
     parse_shell_array_string,
     repair_shell_arguments,
     repair_shell_command_argument,
+    translate_write_file_call,
+    write_file_shell_command,
+    write_file_tool_spec,
 )
 from open_gate.linter import ToolCall
+
+
+class WriteFileToolTests(unittest.TestCase):
+    def test_shell_command_round_trips_content_via_base64(self) -> None:
+        content = "import re\ndef f():\n    return \"a'b\" + '''x@'\\n'@y'''\n# $env `tick`\n"
+        cmd = write_file_shell_command("pkg/sub dir/engine.py", content)
+        self.assertEqual(cmd[0], "powershell.exe")
+        script = cmd[-1]
+        # the content must appear ONLY as base64, never raw (no shell exposure)
+        self.assertNotIn(content, script)
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        self.assertIn(b64, script)
+        self.assertEqual(base64.b64decode(b64).decode("utf-8"), content)
+        self.assertIn("WriteAllBytes", script)
+
+    def test_shell_command_escapes_single_quote_in_path(self) -> None:
+        script = write_file_shell_command("o'brien/a.py", "x")[-1]
+        self.assertIn("$p='o''brien/a.py'", script)
+
+    def test_translate_write_file_to_shell(self) -> None:
+        call = {
+            "id": "fc1", "type": "function_call", "call_id": "c1", "name": "write_file",
+            "arguments": json.dumps({"path": "a.py", "content": "print('x')\n"}),
+        }
+        t = translate_write_file_call(call)
+        self.assertEqual(t["name"], "shell")
+        self.assertEqual(t["call_id"], "c1")
+        self.assertIn("command", json.loads(t["arguments"]))
+
+    def test_translate_ignores_non_write_file_and_bad_args(self) -> None:
+        self.assertIsNone(translate_write_file_call({"name": "shell", "arguments": "{}"}))
+        self.assertIsNone(translate_write_file_call(
+            {"name": "write_file", "arguments": json.dumps({"path": "a.py"})}
+        ))
+
+    def test_tool_spec_shape(self) -> None:
+        spec = write_file_tool_spec()
+        self.assertEqual(spec["name"], "write_file")
+        self.assertEqual(set(spec["parameters"]["required"]), {"path", "content"})
 
 
 class CommandQualityTests(unittest.TestCase):

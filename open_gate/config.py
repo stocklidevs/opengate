@@ -29,6 +29,7 @@ DEFAULT_CONFIG: JsonObject = {
     "instruction_policy": "auto",
     "tool_schema_policy": "auto",
     "stream_heartbeat_seconds": 2.0,
+    "write_file_tool": False,
     "quiet": False,
     "no_banner": False,
 }
@@ -97,6 +98,7 @@ def flatten_config(raw: JsonObject) -> JsonObject:
         "tool_schema_policy",
         "stream_heartbeat_seconds",
         "upstream_max_output_tokens",
+        "write_file_tool",
     )
     return {key: value for key, value in flattened.items() if value is not None}
 

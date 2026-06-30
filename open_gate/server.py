@@ -183,6 +183,7 @@ class Handler(BaseHTTPRequestHandler):
             upstream_model=self.server.config.get("model") if self.server.config.get("upstream_base_url") else None,
             upstream_capabilities=self.server.config.get("upstream_capabilities"),
             upstream_max_output_tokens=int(self.server.config.get("upstream_max_output_tokens", 4096)),
+            write_file_tool=bool(self.server.config.get("write_file_tool", False)),
         )
 
     def _proxy_timing(self, started_at: datetime, started_monotonic: float, stream_heartbeats: int) -> JsonObject:
@@ -486,6 +487,7 @@ SETTING_DESCRIPTIONS = {
     "instruction_policy": "Controls whether oversized Codex instructions are digested before upstream forwarding.",
     "tool_schema_policy": "Controls whether oversized tool schemas are compacted before upstream forwarding.",
     "stream_heartbeat_seconds": "Seconds between Responses heartbeat events while waiting for vLLM.",
+    "write_file_tool": "Inject a write_file(path, content) tool so local models write files via JSON args; Open Gate translates each call into a robust base64 shell write before Codex sees it.",
     "text": "Probe response text used when OpenGate runs without an upstream.",
     "fixture": "Optional text fixture used by capture/probe mode.",
     "quiet": "Suppress per-request HTTP logging.",
@@ -623,6 +625,7 @@ def print_startup_banner(config: JsonObject) -> None:
         "instruction_policy",
         "tool_schema_policy",
         "stream_heartbeat_seconds",
+        "write_file_tool",
         "quiet",
     ]
     width = max(len(key) for key in keys)
@@ -685,6 +688,12 @@ def main() -> int:
         "--tool-schema-policy",
         choices=["full", "auto", "compact"],
         help="full forwards tool schemas unchanged; auto/compact trim oversized schema descriptions before forwarding upstream.",
+    )
+    parser.add_argument(
+        "--write-file-tool",
+        action="store_true",
+        default=None,
+        help="Inject a write_file(path, content) tool for local models; Open Gate translates each call into a robust base64 shell write before Codex sees it.",
     )
     parser.add_argument("--quiet", action="store_true", default=None)
     parser.add_argument("--no-banner", action="store_true", default=None, help="Skip the startup settings banner.")

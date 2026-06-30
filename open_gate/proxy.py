@@ -13,7 +13,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from .command_quality import EMPTY_ARTIFACT_WRITE_DIAGNOSTIC, inspect_tool_calls, parse_shell_array_string, repair_shell_arguments
+from .command_quality import (
+    EMPTY_ARTIFACT_WRITE_DIAGNOSTIC,
+    WRITE_FILE_TOOL_NAME,
+    inspect_tool_calls,
+    parse_shell_array_string,
+    repair_shell_arguments,
+    translate_write_file_call,
+    write_file_tool_spec,
+)
 from .linter import ToolCall, analyze_text, load_tool_specs
 
 
@@ -146,6 +154,7 @@ def forward_responses_request(
     tool_schema_policy: str = "auto",
     upstream_capabilities: JsonObject | None = None,
     upstream_max_output_tokens: int | None = None,
+    write_file_tool: bool = False,
 ) -> ProxyResult:
     if normalization_mode not in {"repair", "observe"}:
         raise ValueError(f"Unsupported normalization mode: {normalization_mode}")
@@ -172,6 +181,7 @@ def forward_responses_request(
         instruction_policy=instruction_policy,
         tool_schema_policy=tool_schema_policy,
         upstream_capabilities=upstream_capabilities,
+        write_file_tool=write_file_tool,
     )
     upstream_transform["requested_model"] = requested_model
     upstream_transform["upstream_model"] = upstream_request.get("model")
@@ -198,6 +208,7 @@ def forward_responses_request(
             instruction_policy=instruction_policy,
             tool_schema_policy=tool_schema_policy,
             upstream_capabilities=upstream_capabilities,
+            write_file_tool=write_file_tool,
         )
         upstream_transform["retry_reason"] = "upstream_rejected_native_input"
         upstream_transform["first_attempt"] = {
@@ -268,10 +279,13 @@ def transform_upstream_request(
     instruction_policy: str = "auto",
     tool_schema_policy: str = "auto",
     upstream_capabilities: JsonObject | None = None,
+    write_file_tool: bool = False,
 ) -> JsonObject:
     original_input = request_body.get("input")
     needs_flattening = needs_flattened_input(original_input)
     capability_reason = capability_flatten_reason(original_input, upstream_capabilities)
+    if write_file_tool:
+        inject_write_file_tool(request_body)
     tools = request_body.get("tools") if isinstance(request_body.get("tools"), list) else []
     context_forces_flatten = (
         upstream_input_mode == "auto" and context_policy == "spoon" and isinstance(original_input, list)
@@ -413,6 +427,10 @@ def build_tool_guardrail_text(tools: list[JsonObject]) -> str:
         "- Use structured tool calls only; never emit XML/JSON/function-call syntax as assistant text or reasoning.",
         "- Never create or truncate an empty target artifact as a placeholder; write the complete requested file when you call a tool.",
     ]
+    if WRITE_FILE_TOOL_NAME in tool_names:
+        lines.append(
+            "- To create or overwrite any file, call write_file(path, content) with the complete content as a plain string; do not write file content through shell here-strings, python -c, or nested powershell."
+        )
     if unavailable:
         lines.append(f"- These common aliases are unavailable here unless listed above: {', '.join(unavailable)}.")
     if "web_search" in tool_names and "shell" in tool_names:
@@ -1151,6 +1169,7 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         and isinstance(normalized.get("output"), list)
     ):
         actionable_output_repair = ensure_actionable_output(normalized, tools)
+    write_file_translations = translate_write_file_calls_in_response(normalized)
     normalized_command_quality_issues = inspect_tool_calls(collect_existing_function_calls(normalized))
 
     normalization = {
@@ -1164,6 +1183,7 @@ def normalize_responses_response(response: JsonObject, original_request: JsonObj
         "channel_delimiter_text_repairs": channel_delimiter_repairs,
         "upstream_command_quality_issues": upstream_command_quality_issues,
         "normalized_command_quality_issues": normalized_command_quality_issues,
+        "write_file_translations": write_file_translations,
         "actionable_output_repair": actionable_output_repair,
         "reasoning_items_removed": removed_reasoning_items,
         "stripped_text_items": stripped,
@@ -1250,6 +1270,36 @@ def collect_existing_function_calls(response: JsonObject) -> list[JsonObject]:
         if isinstance(item, dict) and item.get("type") in ("function_call", "custom_tool_call"):
             calls.append(item)
     return calls
+
+
+def translate_write_file_calls_in_response(response: JsonObject) -> int:
+    """Rewrite any structured `write_file` call in the response into an equivalent
+    `shell` call (robust base64 write) so Codex, which only knows `shell`, never sees
+    the injected tool. Runs unconditionally; a no-op when the tool was not injected."""
+    output = response.get("output")
+    if not isinstance(output, list):
+        return 0
+    count = 0
+    for index, item in enumerate(output):
+        translated = translate_write_file_call(item)
+        if translated is not None:
+            output[index] = translated
+            count += 1
+    return count
+
+
+def inject_write_file_tool(request_body: JsonObject) -> bool:
+    """Add the `write_file` tool to the upstream request so the model can write files
+    via structured JSON arguments instead of fragile shell here-strings. Only injected
+    when `shell` is available (we translate write_file -> shell) and not already present."""
+    tools = request_body.get("tools")
+    if not isinstance(tools, list):
+        return False
+    names = set(available_tool_names(tools))
+    if "shell" not in names or WRITE_FILE_TOOL_NAME in names:
+        return False
+    tools.append(write_file_tool_spec())
+    return True
 
 
 def route_web_tool_aliases(response: JsonObject, request_body: JsonObject, tools: list[JsonObject]) -> list[JsonObject]:

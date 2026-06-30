@@ -142,6 +142,42 @@ class ProxyNormalizationTests(unittest.TestCase):
         request["tools"] = tools
         return request
 
+    def test_write_file_tool_injected_and_advertised_when_enabled(self) -> None:
+        import json as _json
+        import copy as _copy
+        request = self.request("Build the files.")
+        request["tools"] = _copy.deepcopy(request["tools"])  # don't mutate the shared TOOLS fixture
+        transform_upstream_request(request, "auto", write_file_tool=True)
+        self.assertIn("write_file", [t.get("name") for t in request["tools"]])
+        self.assertIn("write_file(path, content)", _json.dumps(request))
+
+    def test_write_file_tool_not_injected_by_default(self) -> None:
+        request = self.request("Build the files.")
+        transform_upstream_request(request, "auto")
+        self.assertNotIn("write_file", [t.get("name") for t in request["tools"]])
+
+    def test_write_file_call_translated_to_shell(self) -> None:
+        import json as _json
+        response = {
+            "id": "resp_wf",
+            "output": [
+                {
+                    "id": "fc_wf",
+                    "type": "function_call",
+                    "call_id": "c_wf",
+                    "name": "write_file",
+                    "arguments": _json.dumps({"path": "csvql/engine.py", "content": "print('x')\n"}),
+                }
+            ],
+        }
+        normalized, details = normalize_responses_response(response, self.request("Write the engine file."))
+        item = normalized["output"][0]
+        self.assertEqual(item["type"], "function_call")
+        self.assertEqual(item["name"], "shell")
+        self.assertEqual(item["call_id"], "c_wf")
+        self.assertEqual(_json.loads(item["arguments"])["command"][0], "powershell.exe")
+        self.assertEqual(details["write_file_translations"], 1)
+
     def test_promotes_recoverable_fenced_tool_json(self) -> None:
         response = {
             "id": "resp_test",
