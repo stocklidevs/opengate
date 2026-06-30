@@ -1384,7 +1384,12 @@ def write_file_shell_command(path: str, content: str) -> list[str]:
     exposure: the content is base64-encoded (safe charset) and decoded to bytes by
     PowerShell, so quotes, newlines, and dollar signs in the content cannot be
     misinterpreted. The only interpolated values are the base64 string and the
-    single-quote-escaped path."""
+    single-quote-escaped path.
+
+    On success the command emits a one-line confirmation to stdout
+    (`wrote <n> bytes to <path>`). `WriteAllBytes` is silent, and an empty tool
+    result leads some models to assume the write failed and re-issue it in a loop;
+    the explicit confirmation gives positive feedback so the model advances."""
     b64 = base64.b64encode(str(content).encode("utf-8")).decode("ascii")
     safe_path = str(path).replace("'", "''")
     script = (
@@ -1392,7 +1397,8 @@ def write_file_shell_command(path: str, content: str) -> list[str]:
         f"$d=[System.Convert]::FromBase64String('{b64}'); "
         f"$dir=[System.IO.Path]::GetDirectoryName($p); "
         f"if($dir){{[System.IO.Directory]::CreateDirectory($dir) | Out-Null}}; "
-        f"[System.IO.File]::WriteAllBytes($p,$d)"
+        f"[System.IO.File]::WriteAllBytes($p,$d); "
+        f"Write-Output ('wrote ' + $d.Length + ' bytes to ' + $p)"
     )
     return ["powershell.exe", "-NoProfile", "-Command", script]
 

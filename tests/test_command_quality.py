@@ -34,6 +34,17 @@ class WriteFileToolTests(unittest.TestCase):
         script = write_file_shell_command("o'brien/a.py", "x")[-1]
         self.assertIn("$p='o''brien/a.py'", script)
 
+    def test_shell_command_emits_success_confirmation(self) -> None:
+        # A silent WriteAllBytes leaves the model with an empty tool result, which
+        # some models read as failure and loop on. The command must echo a
+        # one-line confirmation with the exact byte count written.
+        script = write_file_shell_command("a.py", "x")[-1]
+        self.assertIn("Write-Output", script)
+        self.assertIn("$d.Length", script)
+        self.assertIn("bytes to", script)
+        # WriteAllBytes must run before the confirmation is printed.
+        self.assertLess(script.index("WriteAllBytes"), script.index("Write-Output"))
+
     def test_translate_write_file_to_shell(self) -> None:
         call = {
             "id": "fc1", "type": "function_call", "call_id": "c1", "name": "write_file",

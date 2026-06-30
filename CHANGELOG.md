@@ -8,6 +8,10 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.7.1 - 2026-06-30
+
+- `write_file` now emits a one-line stdout confirmation (`wrote <n> bytes to <path>`) after a successful write. `WriteAllBytes` is silent, so the translated `shell` call previously returned an empty tool result; some models (observed with Qwen3-Coder-Next on a multi-file build) read the empty result as a failed write and re-issued the same `write_file` call in a degenerate loop, never advancing past the first file. The explicit confirmation gives positive feedback so the model proceeds. No effect unless the `write_file` tool is enabled.
+
 ## 0.7.0 - 2026-06-30
 
 - Added an optional `write_file(path, content)` tool (`--write-file-tool` / `[proxy] write_file_tool`). When enabled, Open Gate injects the tool into the upstream request so local models write files via structured JSON arguments instead of fragile PowerShell here-strings, and advertises it in the tool-discipline guardrail (previously `write_file` was warned against as unavailable). Each returned `write_file` call is translated into a robust base64 `shell` write before Codex sees it, so Codex still only ever receives `shell`. Adds the `write_file_translations` normalization telemetry field. Default off; no behavior change unless enabled. Motivated by repeated local-model failures writing large quote-heavy source files through the shell.
