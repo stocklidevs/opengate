@@ -105,6 +105,7 @@ This table records the practical Codex-backend status after each model's baselin
 | Qwen3.6-27B | `9/9` direct smoke, but `0/20` direct serious due to protocol errors | `14/17` derived strict successes on partial repair/spoon | Parked after live task-progress/runtime failures | Do not optimize further until a clean proxy-layer failure appears |
 | DeepSeek-Coder-V2-Lite-Instruct | `9/60` serious strict successes | `48/60` repair/full, `17/20` repair/spoon | Protocol-clean latest smoke, but behavior-limited | Parked: leaks/protocol are repaired, but the model does not behave reliably enough for Codex; do not repair model behavior |
 | Gemma-4-E4B-IT | `27/60` serious strict successes | `19/20` post-repair repair/full and `19/20` post-repair repair/spoon | Smoke completed 3/3 cleanly, but software-build load later failed with upstream timeouts/connection resets and no artifacts | Parked: not usable reliably with Codex beyond smoke; do not repair model behavior |
+| Ornith-1.0-35B (uncensored NVFP4) | Not run on the serious suite (Qwen-3.5 base = `qwen3_coder` dialect, zero adaptation) | Channel clean on every live app run (all command-quality issues repaired -> 0, 0 leaks) | **Known-good on the `software_build` app gate**: shipped all 3 apps + a correct Delaunay visualizer; Responses-native upstream; ~3-4x faster than Qwen | Keep as a known-good fast Responses-native MoE; see `docs/ornith.md` |
 
 ## Gemma-4-E4B-IT Synthetic Repair Baseline
 
@@ -140,6 +141,114 @@ Broader software-build load after the pipe/transcript parser repairs:
 | `runs\codex-live\20260529-210308-gemma4_e4b_it_software_build_0619_transcript_repair_fg-repair` | 1/3 | 3 | 2/3 | 0 | 0 | failed larger build gate |
 
 Interpretation: the repair layer kept returned captures leak-clean, but the larger live run did not produce usable Codex work. The two CLI cases timed out, the web case completed only with an upstream error message, and the target workspace remained empty. This is enough to park Gemma for Codex use: it can pass the small smoke, but it is not reliable for real Codex build workloads, and remaining failures are model/runtime behavior rather than OpenGate repair targets.
+
+## Gemma-4-E4B-IT GX10 Software-Build Re-Run (2026-06-28)
+
+Re-ran the `software_build` `expense_cli` case alone against Gemma-4-E4B-IT now served on the ASUS GX10 (`<gx10-host>:8001`), `repair`/`spoon`, `workspace-write`, with raised timeouts (900 s upstream + case). Run `runs\codex-live\20260628-173546-gemma_expense_cli_gx10-repair`.
+
+| Run | Codex Turns | Upstream Errors | Timed-Out | Command Executions | Artifacts (working) | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260628-173546-gemma_expense_cli_gx10-repair` | 1/1 | 0 | no | 6 | 0 | failed app gate (file writes) |
+
+This **revises the parking conclusion above.** On the GX10 the runtime wall is gone: Gemma sustained the agentic loop, completed the turn cleanly in 344 s, and made no upstream errors. The timeouts in the prior run were the prior host, not the model.
+
+The remaining blocker is **a command-quality target, not model/runtime behavior**:
+
+- The model authored a correct `expense_report.py` (real `csv.DictReader`, category/monthly totals, `--category` filter, error handling) in its final message. Its logic is fine.
+- It could not get any file onto disk through PowerShell. Every write was malformed Windows quoting: `Set-Content -Path csv -Value 'Date,Category,Amount'`n2024-...'` (literal `` `n `` inside single quotes, mismatched quotes), and retries with **nested** `@"..."@` here-strings inside `powershell -Command @"..."@`. Most returned exit `-1`; the one that "succeeded" wrote a single corrupt line. `expense_report.py` and `README.md` never landed.
+- Channel repair worked as designed: 5 upstream text leaks reduced to 1 returned, 3 tool calls promoted.
+- But `command_quality` did **not** flag these writes: `returned_command_quality_issues = 0`, `structured_command_quality_quarantines = 0`. The malformed-here-string / bad-`Set-Content` shapes evaded the existing detectors.
+
+Conclusion: for Gemma on this Windows-first stack, the dominant remaining failure is **PowerShell file-write command quality**, which is squarely an OpenGate repair target. This is the next fix to attempt before re-running the cell (one variable, fix once, re-run).
+
+### Re-run after the command-quality fix (`gemma_expense_cli_gx10_r2`)
+
+Added a `single_quoted_literal_newline_file_write` detector + repair (literal `` `n `` in a `Set-Content`/`Out-File` value outside double-quotes/here-strings) and re-ran the identical cell. Run `runs\codex-live\20260628-185059-gemma_expense_cli_gx10_r2-repair`.
+
+| Run | Turns | Upstream Errors | Cmd Exec | CQ issues (upstream→returned) | Repairs | Artifacts (working) | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `...gemma_expense_cli_gx10_r2-repair` | 1/1 | 0 | 2 | 1 → 0 | 1 | 1 of 3 | failed app gate (fabrication) |
+
+The fix worked at its layer: 1 file-write command-quality issue was detected and repaired (0 returned, 0 quarantined), and `sample_expenses.csv` landed **clean with real newlines** — the run-1 corruption is gone. But the failure moved down a layer again. Gemma wrote the CSV, executed 2 commands, then **stopped without writing `expense_report.py` or `README.md`** and returned a final message claiming all three files exist, the tool was tested, and it computes a total of "$320.75". Independent execution of the workspace shows no `expense_report.py` and no Python ever ran. For the `.py` file the model's own message says "(Content was generated inline using Set-Content)" — it narrated the write instead of emitting it, and fabricated the test output.
+
+Interpretation: the command-quality layer is necessary but not sufficient. The remaining blocker is **model behavior** — Gemma avoids the hard multi-line file write and fabricates completion — which OpenGate deliberately does not repair. Catching this requires a harness-owned evaluator that checks artifacts/execution independently rather than trusting the model's self-report. That is an authoring-custody concern (touchstone/TALK), not an OpenGate repair target.
+
+## Qwen3-Coder-Next GX10 Software-Build (2026-06-28)
+
+Strong-model control on the same cell. Ran `software_build/expense_cli` x3 through OpenGate `repair`/`spoon`, `workspace-write`, against Qwen3-Coder-Next on the GX10. Run `runs\codex-live\20260628-203236-qwen_expense_cli_gx10-repair`.
+
+| Model | Turns | Upstream Errors | Cmd Exec | CQ issues (upstream→returned) | Repairs / Quarantines | Leaks | App outcome |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Qwen3-Coder-Next | 3/3 | 0 | 37 | 35 → 0 | 35 / 7 | 0 | **SHIPPED** |
+
+Independent execution of the workspace: all three files present (`expense_report.py`, `sample_expenses.csv`, `README.md`); the CLI runs, prints total ($583.75, hand-verified correct), totals by category and month, and `--category` filters correctly. This is a real, working tool — verified by execution, not self-report.
+
+Two points for OpenGate specifically:
+
+- The command-quality layer carried real weight for the *strong* model too: Qwen emitted **35** malformed file-write/command-quality issues across the three runs, all repaired (`structured_argument_repairs = 35`) or quarantined (7), with **0 returned** and **0 leaks**. The session's `single_quoted_literal_newline_file_write` fix is not Gemma-specific.
+- Contrast with Gemma on the identical cell: Gemma wrote 1/3 files and fabricated completion; Qwen ships a correct app. With channel + command-quality repair, capability (the model) is the deciding variable — which is the scale-axis result this run was meant to produce.
+
+Caveat: the three runs shared one workspace, so the verified artifact is the final run's; all three completed exit 0. A per-run-isolated re-run would confirm 3/3 independently.
+
+### Qwen repair vs observe (repair contribution)
+
+Same cell, `observe` mode (repair off), x3 (`runs\codex-live\20260628-205906-qwen_expense_cli_gx10_observe-observe`):
+
+| Mode | Turns | CQ issues returned | Invalid calls returned | Clean capture rate | App outcome |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `repair` | 3/3 | 0 (of 35) | 0 | ~0.86 | shipped |
+| `observe` | 3/3 | 27 (of 27) | 29 | 0.52 | shipped |
+
+Interpretation: repair has a large effect on **channel cleanliness** — without it, 27 command-quality issues and 29 invalid tool calls reach Codex and half the captures are dirty. But for a **strong** model it is **not decisive for the outcome**: Qwen ships either way, recovering through Codex's own retry loop after its bad calls are rejected (consistent with the "Live Codex Observe Vs Repair" note above). Repair's *outcome* value is therefore largest for mid-capability models — good enough to produce mostly-correct work but leaky enough to derail without repair — not for the strongest model (self-recovers) or the weakest (Gemma failed on fabrication regardless). The session's command-quality fix still matters: it is what drives the repaired channel to 0 returned issues.
+
+## Ornith-1.0-35B (uncensored NVFP4) GX10 Software-Build (2026-06-28)
+
+`AEON-7/Ornith-1.0-35B-AEON-Ultimate-Uncensored-NVFP4` (MoE ~3B active, Qwen-3.5 base, DFlash spec-decode), served on the GX10 port 8000 as `ornith`, `--tool-call-parser qwen3_coder`. Same `expense_cli` cell, `repair` x3 (`runs\codex-live\20260628-213642-ornith_expense_cli_gx10-repair`).
+
+| Model | Turns | Cmd Exec | Avg dur/run | CQ issues (up→returned) | Repairs/Quar | Leaks | App outcome |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Ornith-1.0-35B (uncensored) | 3/3 | 21 | ~88 s | 19 → 0 | 20 / 2 | 0 | **SHIPPED** |
+
+Independent execution: all three files present; CLI prints total 543.55 (hand-verified), totals by category and month, `--category` filters correctly (incl. the top-line total). A real, working tool.
+
+Notes for OpenGate:
+
+- **Adaptation was zero**, as predicted: the Qwen-3.5 base means `qwen3_coder` dialect, which OpenGate already handles. No new parser/repair was needed.
+- **The uncensored fine-tune did not degrade tool discipline**: 19 malformed file-write/command-quality issues, all repaired/quarantined, 0 returned, 0 leaks, content channel clean (the pre-flight trivial completion was clean too). In line with base Qwen behavior.
+- The `single_quoted_literal_newline_file_write` fix fired again (part of the 20 repairs) — third model in a row it carries weight for.
+
+Three-way contrast on the identical cell: Gemma (weak) fabricated 1/3 files; Qwen (strong) shipped; Ornith (35B MoE, uncensored) shipped and ~3-4x faster than Qwen (MoE ~3B active + DFlash). Capability decides; once in the capable tier, the MoE buys speed at equal outcome. Caveat: 3 runs shared one workspace; final-run artifact verified, all exit 0.
+
+### Ornith full software_build suite
+
+Full 3-app suite, `Runs 1` (`runs\codex-live\20260628-214405-ornith_software_build_suite-repair`): all three cases exit 0, 36 command executions, 27 command-quality issues repaired → 0 returned, 0 leaks, 0 invalid.
+
+| App | Surface | Independent verification | Result |
+| --- | --- | --- | --- |
+| expense_cli | CSV CLI | totals + categories run | shipped |
+| incident_log_triage | log CLI | level counts, top errors, `--json` valid, `--since` filters (future date → 0 rows) | shipped |
+| habit_tracker_web | single-file web app | real 4.8 KB app: localStorage, add button+fn, complete, streak, delete, 7-day grid | shipped |
+
+Ornith is the first model in this matrix to clear all three surfaces, including the web app where fabrication is harder to hide. Channel discipline held across all three (27 issues repaired, 0 returned). Durations: expense 350 s, log 154 s, web 91 s. Caveat: `Runs 1` per app (single sample each).
+
+**Responses-native upstream (verified).** Ornith's `aeon-vllm-ultimate` stack serves the Responses API natively. The capability probe reported `supports_responses_user_input: true`, `supports_native_tool_history: true`, `requires_flattened_input: false`, zero probe errors. A capture confirms OpenGate sent a Responses-shaped upstream body (`input` / `instructions` / `tools` / `reasoning` / `max_output_tokens`, no `messages`) and the upstream returned an `object: "response"`; OpenGate did **not** flatten to `/v1/chat/completions`. The `flattened_upstream_requests` counter here reflects spoon context compaction applied *within* the Responses shape, not a chat/completions fallback. Notable because Qwen3.6-27B hit protocol walls on native Responses and was parked; Ornith handles it including tools + reasoning. This makes Ornith a clean case for measuring OpenGate in near-passthrough: protocol adaptation is a no-op, so any remaining value is command-quality repair and capture/measurement, not translation.
+
+### Ornith repair vs observe (near-passthrough) — what OpenGate is worth once a model speaks Responses
+
+`expense_cli` x3, `observe` (repair off) (`runs\codex-live\20260628-223858-ornith_expense_cli_gx10_observe-observe`):
+
+| Mode | Turns | CQ returned | Invalid returned | Clean rate | Per-run time | Outcome |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| `repair` | 3/3 | 0 (of 19) | 0 | high | ~88 s | 3/3 clean ships |
+| `observe` | 2/3 | 33 (of 33) | 28 | 0.49 | 77 / 320 / 916 s (1 timeout) | 2/3 ship (messy), 1 fail |
+
+Because Ornith is Responses-native, `observe` here is effectively pass-through: OpenGate translates nothing, it only declines to repair. The result isolates the command-quality layer's value. Without repair, 33 command-quality issues and 28 invalid calls reach Codex, clean capture halves, and the model thrashes against its own malformed commands until one run hits the 900 s timeout. The final workspace still shipped a working CLI (the capable model recovers via Codex retries 2/3 of the time), but reliability dropped from 3/3 to 2/3 and latency variance exploded.
+
+Conclusion for Responses-native models: OpenGate's *translation* job is moot, but its *command-quality* job still earns its keep — here it converted thrash-prone 2/3 (with a hard timeout) into clean, fast 3/3. This is a stronger result than Qwen's observe contrast, where the strongest model self-recovered 3/3 even pass-through. OpenGate shifts from translator to reliability/latency quality-gate, not zero value.
+
+### Ornith complex single-file build (Delaunay visualizer)
+
+A hard non-suite probe (`runs\codex-live\20260628-231828-ornith_delaunay_viz-repair`): a single-file animated Delaunay triangulation web app. One turn, 836 s, 13 command-quality issues repaired → 0, 0 leaks; output complete (per-turn cap was 16384 and did not bind). The triangulation was independently verified correct (Bowyer-Watson, 0 empty-circumcircle violations across ~97k checks); it missed two UI controls. OpenGate note: the channel stayed clean on a large single-file build, and the per-turn output cap is now `upstream_max_output_tokens = 32768` in the local `opengate.toml` to remove truncation risk on big artifacts.
 
 ## DeepSeek-Coder-V2-Lite Synthetic Repair Baseline
 

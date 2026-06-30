@@ -310,6 +310,79 @@ class CommandQualityTests(unittest.TestCase):
 
         self.assertEqual(repaired["command"], ["powershell.exe", "-Command", "$script = @'\nimport asyncio\n'@"])
 
+    def test_detects_single_quoted_literal_newline_file_write(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Set-Content -Path sample.csv -Value 'Date,Category,Amount`n2024-01-15,Groceries,45.20`n2024-01-20,Dining,60.00'",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertIn("single_quoted_literal_newline_file_write", {issue["issue"] for issue in issues})
+
+    def test_repairs_single_quoted_literal_newline_file_write(self) -> None:
+        repaired = repair_shell_arguments(
+            {
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Set-Content -Path sample.csv -Value 'Date,Amount`n2024-01-15,45.20'",
+                ]
+            }
+        )
+
+        self.assertEqual(
+            repaired["command"],
+            ["powershell.exe", "-Command", "Set-Content -Path sample.csv -Value 'Date,Amount\n2024-01-15,45.20'"],
+        )
+
+    def test_allows_double_quoted_newline_escape_file_write(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    'Set-Content -Path sample.csv -Value "Date,Amount`n2024-01-15,45.20"',
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertNotIn("single_quoted_literal_newline_file_write", {issue["issue"] for issue in issues})
+
+    def test_allows_here_string_file_write_with_backtick_n_in_body(self) -> None:
+        call = ToolCall(
+            name="shell",
+            arguments={
+                "command": [
+                    "powershell.exe",
+                    "-Command",
+                    "Set-Content -LiteralPath sample.csv -Value @'\nDate,Amount`n2024-01-15,45.20\n'@ -Encoding UTF8",
+                ]
+            },
+            source="responses_structured",
+            span=(0, 0),
+            raw="{}",
+        )
+
+        issues = inspect_tool_calls([call])
+
+        self.assertNotIn("single_quoted_literal_newline_file_write", {issue["issue"] for issue in issues})
+
     def test_detects_python_compound_statement_one_liner(self) -> None:
         call = ToolCall(
             name="shell",

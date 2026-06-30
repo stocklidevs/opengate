@@ -106,7 +106,7 @@
       "id": "baseline_view_image",
       "category": "normal_tool",
       "expected_tool": "view_image",
-      "prompt": "Inspect this local image path before answering: C:\\\\Users\\\\example\\\\source\\\\repos\\\\StockliDevsPersona.png. Call view_image with that path."
+      "prompt": "Inspect this local image path before answering: C:\\\\Users\\\\example\\\\source\\\\repos\\\\sample-portrait.png. Call view_image with that path."
     },
     {
       "id": "xml_bait_shell",

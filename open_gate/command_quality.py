@@ -370,6 +370,19 @@ def inspect_powershell_script(script: str, arguments: JsonObject, command: list[
             }
         )
 
+    if contains_single_quoted_literal_newline_file_write(script):
+        issues.append(
+            {
+                "tool": "shell",
+                "issue": "single_quoted_literal_newline_file_write",
+                "severity": "error",
+                "source": source,
+                "repairable": True,
+                "command": command,
+                "message": "The file-write value contains a literal backtick-n outside a double-quoted string or here-string; in single quotes `n is written literally, not as a newline, so the file is one corrupt line.",
+            }
+        )
+
     if looks_like_malformed_json_array_command(script):
         issues.append(
             {
@@ -579,6 +592,12 @@ def repair_shell_arguments(arguments: JsonObject) -> JsonObject | None:
         changed = True
         command = repaired_command
 
+    repaired_command = repair_single_quoted_literal_newline_file_write_command(command)
+    if repaired_command is not None:
+        repaired["command"] = repaired_command
+        changed = True
+        command = repaired_command
+
     repaired_command = repair_bash_heredoc_command(command)
     if repaired_command is not None:
         repaired["command"] = repaired_command
@@ -634,6 +653,20 @@ def repair_bare_here_string_file_write_command(command: Any) -> list[str] | None
         return None
     repaired_script = convert_bare_here_string_to_set_content(command[2])
     if repaired_script is None:
+        return None
+    return [*command[:2], repaired_script, *command[3:]]
+
+
+def repair_single_quoted_literal_newline_file_write_command(command: Any) -> list[str] | None:
+    if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
+        return None
+    if not is_powershell_command_vector(command) or len(command) < 3:
+        return None
+    script = command[2]
+    if not contains_single_quoted_literal_newline_file_write(script):
+        return None
+    repaired_script = script.replace("`r`n", "\n").replace("`n", "\n").replace("`r", "\n")
+    if repaired_script == script:
         return None
     return [*command[:2], repaired_script, *command[3:]]
 
@@ -1025,6 +1058,59 @@ def contains_bash_heredoc(script: str) -> bool:
 
 def contains_bad_here_string_header(script: str) -> bool:
     return bool(re.search(r"@['\"]`n\S", script))
+
+
+FILE_WRITE_CMDLET_RE = re.compile(r"\b(?:Set-Content|Add-Content|Out-File)\b", re.IGNORECASE)
+
+
+def contains_single_quoted_literal_newline_file_write(script: str) -> bool:
+    if not FILE_WRITE_CMDLET_RE.search(script):
+        return False
+    scrubbed = strip_powershell_double_quoted_and_here_strings(script)
+    return bool(re.search(r"`[rn]", scrubbed))
+
+
+def strip_powershell_double_quoted_and_here_strings(script: str) -> str:
+    script = strip_powershell_here_strings(script)
+    out: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(script):
+        char = script[index]
+        if quote == '"':
+            if char == "`" and index + 1 < len(script):
+                index += 2
+                continue
+            if char == '"' and index + 1 < len(script) and script[index + 1] == '"':
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+            index += 1
+            continue
+        if quote == "'":
+            if char == "'" and index + 1 < len(script) and script[index + 1] == "'":
+                out.append(char)
+                out.append(script[index + 1])
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+            out.append(char)
+            index += 1
+            continue
+        if char == '"':
+            quote = '"'
+            index += 1
+            continue
+        if char == "'":
+            quote = "'"
+            out.append(char)
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def contains_malformed_powershell_here_string(script: str) -> bool:

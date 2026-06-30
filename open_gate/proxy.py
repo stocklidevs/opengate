@@ -1897,6 +1897,13 @@ def command_quality_diagnostic_text(issue_names: list[str]) -> str:
             f"Open Gate blocked an invalid shell command ({issue_text}). "
             "Do not retry that route; continue from available context or use one smaller direct action."
         )
+    if "single_quoted_literal_newline_file_write" in issue_names:
+        return (
+            f"Open Gate blocked an invalid file write ({issue_text}). "
+            "Write files with a PowerShell here-string: a line ending in Set-Content -LiteralPath <path> -Value @' , "
+            "then the exact file content on its own lines, then a final line containing only '@ . "
+            "Do not put backtick-n inside single quotes; there it is written literally instead of as a newline."
+        )
     return (
         f"Open Gate blocked an invalid shell command ({issue_text}). "
         "Continue with a smaller valid structured tool call."
