@@ -8,6 +8,10 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.7.3 - 2026-07-01
+
+- `write_file` now gzip-compresses content before base64 (decompressed in PowerShell via `GZipStream`). The payload is inlined into a single PowerShell `-Command` argument, and Windows caps a process command line at ~32 KB; plain base64 of a ~24 KB source file already hit that ceiling and the write failed with `Io(Os { code: 206 })` ("filename or extension is too long") — the exact large-file case the tool exists to serve. Observed live: Qwen3.6 wedged for ~an hour re-attempting a full `engine.py` rewrite it could not save. Gzip shrinks source text ~4x, lifting the practical ceiling to ~100 KB. Compression uses `mtime=0` for reproducible output; the success confirmation still reports the true decompressed byte count. Verified with a byte-exact 57.6 KB round trip and a command-length regression test.
+
 ## 0.7.2 - 2026-07-01
 
 - Recover imitated Codex-transcript tool calls whose JSON body is unterminated. Some models (observed with Qwen3.6) emit a `assistant tool call <name> ...:` header followed by a JSON object that is missing its closing brace, then trailing XML/fence junk (`</parameter></function></tool_call>`). Strict `raw_decode` failed, so the block was detected-and-stripped but no call was extracted or promoted, leaving a bland final assistant message with no tool call — which ends the Codex turn prematurely. The linter now balances the open brackets and trims the trailing junk, so the call is recovered, promoted to a structured `function_call`, and the turn continues. Also strips the residual close-tags from the cleaned assistant text.

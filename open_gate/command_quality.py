@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 from copy import deepcopy
 import json
 import re
@@ -1381,20 +1382,33 @@ def write_file_tool_spec() -> JsonObject:
 
 def write_file_shell_command(path: str, content: str) -> list[str]:
     """Build a shell command that writes `content` to `path` with no shell-quoting
-    exposure: the content is base64-encoded (safe charset) and decoded to bytes by
-    PowerShell, so quotes, newlines, and dollar signs in the content cannot be
-    misinterpreted. The only interpolated values are the base64 string and the
-    single-quote-escaped path.
+    exposure: the content is gzip-compressed and base64-encoded (safe charset), then
+    decompressed to bytes by PowerShell, so quotes, newlines, and dollar signs in the
+    content cannot be misinterpreted. The only interpolated values are the base64
+    string and the single-quote-escaped path.
+
+    Compression matters for correctness, not just size: the payload is inlined into a
+    single PowerShell `-Command` argument, and Windows caps a process command line at
+    ~32 KB. Plain base64 of a ~24 KB source file already hits that ceiling and the
+    write fails with `Io(Os { code: 206 })`, which is exactly the large-file case this
+    tool exists to serve. Gzip shrinks source text ~4x, lifting the practical ceiling
+    to ~100 KB.
 
     On success the command emits a one-line confirmation to stdout
-    (`wrote <n> bytes to <path>`). `WriteAllBytes` is silent, and an empty tool
-    result leads some models to assume the write failed and re-issue it in a loop;
-    the explicit confirmation gives positive feedback so the model advances."""
-    b64 = base64.b64encode(str(content).encode("utf-8")).decode("ascii")
+    (`wrote <n> bytes to <path>`, reporting the decompressed file size). `WriteAllBytes`
+    is silent, and an empty tool result leads some models to assume the write failed
+    and re-issue it in a loop; the explicit confirmation gives positive feedback so the
+    model advances."""
+    b64 = base64.b64encode(gzip.compress(str(content).encode("utf-8"), mtime=0)).decode("ascii")
     safe_path = str(path).replace("'", "''")
     script = (
         f"$p='{safe_path}'; "
-        f"$d=[System.Convert]::FromBase64String('{b64}'); "
+        f"$c=[System.Convert]::FromBase64String('{b64}'); "
+        f"$in=New-Object System.IO.MemoryStream(,$c); "
+        f"$gz=New-Object System.IO.Compression.GZipStream($in,[System.IO.Compression.CompressionMode]::Decompress); "
+        f"$out=New-Object System.IO.MemoryStream; "
+        f"$gz.CopyTo($out); $gz.Dispose(); "
+        f"$d=$out.ToArray(); "
         f"$dir=[System.IO.Path]::GetDirectoryName($p); "
         f"if($dir){{[System.IO.Directory]::CreateDirectory($dir) | Out-Null}}; "
         f"[System.IO.File]::WriteAllBytes($p,$d); "

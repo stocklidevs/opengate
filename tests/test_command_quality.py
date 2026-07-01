@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 import base64
+import gzip
 import json
 
 from open_gate.command_quality import (
@@ -18,17 +19,29 @@ from open_gate.linter import ToolCall
 
 
 class WriteFileToolTests(unittest.TestCase):
-    def test_shell_command_round_trips_content_via_base64(self) -> None:
+    def test_shell_command_round_trips_content_via_gzip_base64(self) -> None:
         content = "import re\ndef f():\n    return \"a'b\" + '''x@'\\n'@y'''\n# $env `tick`\n"
         cmd = write_file_shell_command("pkg/sub dir/engine.py", content)
         self.assertEqual(cmd[0], "powershell.exe")
         script = cmd[-1]
-        # the content must appear ONLY as base64, never raw (no shell exposure)
+        # the content must appear ONLY as gzip+base64, never raw (no shell exposure)
         self.assertNotIn(content, script)
-        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        b64 = base64.b64encode(gzip.compress(content.encode("utf-8"), mtime=0)).decode("ascii")
         self.assertIn(b64, script)
-        self.assertEqual(base64.b64decode(b64).decode("utf-8"), content)
+        # the payload round-trips (decompress) back to the exact content
+        self.assertEqual(gzip.decompress(base64.b64decode(b64)).decode("utf-8"), content)
+        self.assertIn("GZipStream", script)
         self.assertIn("WriteAllBytes", script)
+
+    def test_shell_command_stays_under_windows_cmdline_limit_for_large_file(self) -> None:
+        # Regression: plain base64 of a ~24 KB source file overran the ~32 KB Windows
+        # command-line limit and the write failed with Io(Os code 206). Gzip must keep
+        # even a large, realistic source file's command well under the ceiling.
+        big = ("import os\n\nclass Thing:\n    def method(self, x):\n"
+               "        return x * 2  # a fairly typical line of source\n") * 1200
+        self.assertGreater(len(big.encode("utf-8")), 60_000)
+        script = write_file_shell_command("csvql/engine.py", big)[-1]
+        self.assertLess(len(script), 32_000)
 
     def test_shell_command_escapes_single_quote_in_path(self) -> None:
         script = write_file_shell_command("o'brien/a.py", "x")[-1]
