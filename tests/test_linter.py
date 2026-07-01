@@ -140,6 +140,31 @@ class LinterTests(unittest.TestCase):
         self.assertIn("parsed_tool_call", report.leaks)
         self.assertIn("codex_transcript_tool_call", report.leaks)
 
+    def test_codex_transcript_tool_call_recovers_unterminated_json_and_junk(self) -> None:
+        # Observed with Qwen3.6: a transcript header, then a JSON object that is
+        # missing its closing brace, then XML close tags. Strict raw_decode fails,
+        # so the call must be recovered by balancing brackets and trailing junk
+        # stripped, or the turn ends on a bland final message with no tool call.
+        report = analyze_text(
+            "Good, customers.csv is created. Let me write orders.csv next.\n\n"
+            "assistant tool call shell_command chatcmpl-tool-cf34a0a92717e776:\n"
+            '{"command": ["powershell.exe", "-NoProfile", "-Command", "$p=\'orders.csv\'"]\n'
+            "</parameter>\n</function>\n</tool_call>",
+            TOOLS,
+        )
+
+        self.assertEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "shell_command")
+        self.assertEqual(
+            report.tool_calls[0].arguments["command"],
+            ["powershell.exe", "-NoProfile", "-Command", "$p='orders.csv'"],
+        )
+        self.assertEqual(report.tool_calls[0].source, "codex_transcript_tool_call")
+        self.assertEqual(
+            report.cleaned_text,
+            "Good, customers.csv is created. Let me write orders.csv next.",
+        )
+
     def test_deepseek_v3_delimited_tool_call_is_extracted_and_cleaned(self) -> None:
         tools = [
             {

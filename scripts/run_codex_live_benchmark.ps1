@@ -23,6 +23,7 @@ param(
     [switch]$FailOnPromptSandboxMismatch,
     [int]$CaseTimeoutSeconds = 420,
     [int]$Runs = 1,
+    [int]$ModelContextWindow = 0,
     [string]$Label = "codex_live_smoke",
     [string]$OutputRoot = "runs\codex-live",
     [switch]$DryRun
@@ -124,6 +125,7 @@ $manifest = [ordered]@{
     codex_cwd = $CodexCwd
     suite = $suitePath.Path
     runs = $Runs
+    model_context_window = $ModelContextWindow
     capture_dir = $captureDir
     cases = @()
 }
@@ -230,9 +232,14 @@ try {
                 "-c", 'model_providers.open_gate_qwen.name="Open Gate Qwen"',
                 "-c", "model_providers.open_gate_qwen.base_url=`"http://127.0.0.1:$Port/v1`"",
                 "-c", 'model_providers.open_gate_qwen.wire_api="responses"',
-                "-c", 'model_provider="open_gate_qwen"',
-                $prompt
+                "-c", 'model_provider="open_gate_qwen"'
             )
+            if ($ModelContextWindow -gt 0) {
+                # Tell Codex the real (effective) window so its native compaction
+                # fires before the upstream rejects on context length.
+                $codexArgs += @("-c", "model_context_window=$ModelContextWindow")
+            }
+            $codexArgs += $prompt
 
             $codexJob = Start-Job -Name "open-gate-codex-case-$safeCaseId" -ScriptBlock {
                 param([string[]]$InnerArgs)

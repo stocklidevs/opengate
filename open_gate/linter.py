@@ -103,6 +103,13 @@ CODEX_TRANSCRIPT_TOOL_OUTPUT_HEADER_RE = re.compile(
     r"\s*tool\s+output\s+[^\r\n:]*:\s*",
     re.IGNORECASE,
 )
+# Closing markers a model appends after an imitated tool-call JSON body when it
+# blends transcript, XML, and code-fence syntax (e.g. `}\n</parameter></function>
+# </tool_call>` or a trailing ``` fence). Used to trim junk after recovery.
+TRANSCRIPT_TRAILING_JUNK_RE = re.compile(
+    r"(?:\s*(?:</?\s*(?:tool_call|tool_calls|function|parameter|arguments|response)\b[^>]*>|```+))+\s*",
+    re.IGNORECASE,
+)
 DEEPSEEK_TOOL_MARKER = r"<\uff5ctool\u2581(?:call|calls|output|outputs)\u2581(?:begin|end)\uff5c>|<\uff5ctool\u2581sep\uff5c>"
 DEEPSEEK_TOOL_MARKER_RE = re.compile(DEEPSEEK_TOOL_MARKER, re.DOTALL)
 DEEPSEEK_TOOL_OUTPUTS_RE = re.compile(
@@ -350,6 +357,59 @@ def _gemma_pipe_tool_call_arguments(body: str) -> JsonObject:
     return {"value": body.strip()}
 
 
+def _decode_possibly_unterminated_json(body: str) -> tuple[Any, int] | None:
+    """Decode a JSON value at the start of `body`.
+
+    First tries a strict decode (which already tolerates trailing content). If
+    that fails, recovers the common malformed-imitation shape where a model emits
+    a valid JSON object/array but omits the closing bracket(s) and appends non-JSON
+    junk (XML close tags, code fences), e.g. `{"command": [ ... ]` followed by
+    `</parameter></function></tool_call>`. Returns (parsed, consumed_len) into
+    `body`, or None if nothing recoverable."""
+    decoder = json.JSONDecoder()
+    try:
+        return decoder.raw_decode(body)
+    except json.JSONDecodeError:
+        pass
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    cut: int | None = None
+    for i, ch in enumerate(body):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            if not stack:
+                cut = i + 1
+                break
+        elif ch in "<`":
+            # start of trailing imitation junk (XML tag / code fence) while a
+            # bracket is still open -> the model forgot to close the JSON.
+            cut = i
+            break
+    if cut is None:
+        cut = len(body)
+    if not stack:
+        return None
+    candidate = re.sub(r"[\s,]+$", "", body[:cut]) + "".join(reversed(stack))
+    try:
+        return json.loads(candidate), cut
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_codex_transcript_tool_calls(text: str) -> list[ToolCall]:
     calls: list[ToolCall] = []
     decoder = json.JSONDecoder()
@@ -357,12 +417,15 @@ def _extract_codex_transcript_tool_calls(text: str) -> list[ToolCall]:
         body_start = _skip_whitespace(text, match.end())
         if body_start >= len(text) or text[body_start] not in "{[":
             continue
-        try:
-            parsed, offset = decoder.raw_decode(text[body_start:])
-        except json.JSONDecodeError:
+        decoded = _decode_possibly_unterminated_json(text[body_start:])
+        if decoded is None:
             continue
+        parsed, offset = decoded
 
         body_end = body_start + offset
+        junk = TRANSCRIPT_TRAILING_JUNK_RE.match(text, body_end)
+        if junk:
+            body_end = junk.end()
         span_end = body_end
         output_match = CODEX_TRANSCRIPT_TOOL_OUTPUT_HEADER_RE.match(text, body_end)
         if output_match:

@@ -8,6 +8,11 @@ Open Gate uses semantic versioning while the project is pre-1.0:
 
 ## Unreleased
 
+## 0.7.2 - 2026-07-01
+
+- Recover imitated Codex-transcript tool calls whose JSON body is unterminated. Some models (observed with Qwen3.6) emit a `assistant tool call <name> ...:` header followed by a JSON object that is missing its closing brace, then trailing XML/fence junk (`</parameter></function></tool_call>`). Strict `raw_decode` failed, so the block was detected-and-stripped but no call was extracted or promoted, leaving a bland final assistant message with no tool call — which ends the Codex turn prematurely. The linter now balances the open brackets and trims the trailing junk, so the call is recovered, promoted to a structured `function_call`, and the turn continues. Also strips the residual close-tags from the cleaned assistant text.
+- Benchmark runner (`run_codex_live_benchmark.ps1`): added `-ModelContextWindow`, which passes `-c model_context_window=<n>` to `codex exec` so Codex's native compaction is aware of the served model's real window instead of a wrong default.
+
 ## 0.7.1 - 2026-06-30
 
 - `write_file` now emits a one-line stdout confirmation (`wrote <n> bytes to <path>`) after a successful write. `WriteAllBytes` is silent, so the translated `shell` call previously returned an empty tool result; some models (observed with Qwen3-Coder-Next on a multi-file build) read the empty result as a failed write and re-issued the same `write_file` call in a degenerate loop, never advancing past the first file. The explicit confirmation gives positive feedback so the model proceeds. No effect unless the `write_file` tool is enabled.
