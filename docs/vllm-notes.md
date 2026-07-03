@@ -5,6 +5,10 @@ Checked against `http://127.0.0.1:8001`:
 - Qwen3-Coder-Next on 2026-05-09.
 - GLM-4.7-Flash on 2026-05-10.
 - Qwen3.6-27B basic smoke checked on 2026-05-11 UTC, 2026-05-10 America/New_York.
+- GLM-4.5-Air-NVFP4 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
+- Kimi-Linear-48B-A3B-NVFP4 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
+- MiniMax-M3-MXFP8 deployment checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
+- Devstral-Small-2507 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 
 ## Live Server
 
@@ -73,7 +77,121 @@ OpenGate should keep using `model = "auto"` in `opengate.toml` for this target. 
 
 The first endpoint check reported `root = Qwen/Qwen3.6-27B` and `max_model_len = 65536`. Direct `codex_shell_smoke` passed `9/9`, but direct `qwen_serious_tool_stress` returned `HTTP 400: Unexpected message role` for all 20 cases because that suite uses a Codex-like `developer` message. OpenGate `0.6.9` handles this as a protocol-adaptation problem: startup probes detect unsupported roles, `--upstream-input-mode auto` can flatten unsupported role shapes independently from spoon compression, and native role/history validation errors are retried once with flattened input. Prepared validation steps and result placeholders are in `docs\qwen3-6-27b.md`.
 
-## Reproducible GLM Setup
+## Reproducible GLM-4.5-Air-NVFP4 Setup
+
+The GLM-4.5-Air-NVFP4 CSVQL probe was served on the GX10 with Docker:
+
+```bash
+docker run --rm --gpus all \
+  -p 8000:8000 \
+  -v <hf-cache>:/root/.cache/huggingface \
+  vllm/vllm-openai:nightly-aarch64 \
+  --model Firworks/GLM-4.5-Air-nvfp4 \
+  --served-model-name GLM-4.5-Air-NVFP4 \
+  --max-model-len 65536 \
+  --enable-auto-tool-choice \
+  --tool-call-parser glm47 \
+  --reasoning-parser glm47
+```
+
+Earlier in the same experiment the server was also run with `--max-model-len 131072`. The final 64k retry confirmed `/v1/models` returned:
+
+- `id`: `GLM-4.5-Air-NVFP4`
+- `root`: `Firworks/GLM-4.5-Air-nvfp4`
+- `max_model_len`: `65536`
+
+A trivial tool probe produced a structured tool call, so the endpoint/parser path was viable. The live CSVQL benchmark still failed because the model did not complete the app. The uncapped 64k run also exposed a context-budget issue: Codex requested 32768 output tokens while the prompt already occupied 32769 tokens. Use `-UpstreamMaxOutputTokens` in `scripts\run_codex_live_benchmark.ps1` when measuring smaller context windows so the output reserve is explicit in the manifest.
+
+See `docs\glm-4-5-air-nvfp4.md` for the CSVQL run matrix and interpretation.
+
+## Reproducible Kimi-Linear-48B-A3B-NVFP4 Setup
+
+The Kimi Linear CSVQL probe used the NVFP4 quantization `Firworks/Kimi-Linear-48B-A3B-Instruct-nvfp4` on the GX10:
+
+```bash
+docker run -d --name kimi_linear_nvfp4 --gpus all --ipc=host \
+  -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:nightly-aarch64 \
+  Firworks/Kimi-Linear-48B-A3B-Instruct-nvfp4 \
+  --served-model-name Kimi-Linear-48B-A3B-NVFP4 \
+  --max-model-len 65536 \
+  --trust-remote-code \
+  --gpu-memory-utilization 0.85 \
+  --enable-auto-tool-choice \
+  --tool-call-parser kimi_k2
+```
+
+The cached remote tokenizer initially failed to import `bytes_to_unicode` from `transformers.models.gpt2.tokenization_gpt2`; the live server was booted after patching that cached `tokenization_kimi.py` with a local fallback implementation. After load, `/v1/models` returned:
+
+- `id`: `Kimi-Linear-48B-A3B-NVFP4`
+- `root`: `Firworks/Kimi-Linear-48B-A3B-Instruct-nvfp4`
+- `max_model_len`: `65536`
+
+Plain `/v1/responses` generation worked for a trivial sanity prompt. Tool use did not: a minimal Responses request with one `ping` tool produced explanatory text instead of a structured function call, and the live CSVQL runs made zero Codex tool calls. OpenGate includes a narrow parser for Kimi reserved-token tool-call text observed during probing, but this vLLM/Kimi serving path should be treated as parked until auto tool calling is fixed upstream or served through a working parser/template pair.
+
+## MiniMax-M3-MXFP8 Deployment Attempt
+
+MiniMax-M3-MXFP8 was attempted on the GX10 with the public MXFP8 checkpoint:
+
+```bash
+docker run -d --name minimax_m3_mxfp8 --gpus all --ipc=host \
+  -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:nightly-aarch64 \
+  MiniMaxAI/MiniMax-M3-MXFP8 \
+  --served-model-name MiniMax-M3-MXFP8 \
+  --trust-remote-code \
+  --max-model-len 65536 \
+  --gpu-memory-utilization 0.85 \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+vLLM recognized `MiniMaxM3SparseForConditionalGeneration`, `quantization=mxfp8`, and the MiniMax sparse-attention path, but failed during model construction:
+
+```text
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 4.50 GiB.
+GPU 0 has a total capacity of 119.61 GiB of which 2.79 GiB is free.
+Including non-PyTorch memory, this process has 112.40 GiB memory in use.
+```
+
+A retry with `--cpu-offload-gb 8 --kv-cache-dtype fp8 --enforce-eager` was accepted and selected `UVAOffloader`, but saturated the 119 GiB host memory before the server exposed `/v1/models`. No direct probe or CSVQL run was possible. See `docs\minimax-m3-mxfp8.md`.
+
+## Reproducible Devstral-Small-2507 Setup
+
+Devstral-Small-2507 was served on the GX10 with the Mistral vLLM path:
+
+```bash
+docker run -d --name devstral_small_2507 --gpus all --ipc=host \
+  -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:nightly-aarch64 \
+  mistralai/Devstral-Small-2507 \
+  --served-model-name Devstral-Small-2507 \
+  --tokenizer-mode mistral \
+  --config-format mistral \
+  --load-format mistral \
+  --tool-call-parser mistral \
+  --enable-auto-tool-choice \
+  --max-model-len 65536 \
+  --max-num-seqs 1 \
+  --gpu-memory-utilization 0.85 \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+After load, `/v1/models` returned:
+
+- `id`: `Devstral-Small-2507`
+- `root`: `mistralai/Devstral-Small-2507`
+- `max_model_len`: `65536`
+
+The endpoint passed plain `/v1/responses` sanity generation. Minimal tool probes showed that vLLM rejected function tools without `strict: false`; with `strict: false`, named/forced tool calls worked, while auto tool choice on a trivial probe returned JSON-like assistant text instead of a structured call.
+
+OpenGate now normalizes upstream tool schemas for this class of server by filtering unsupported hosted/namespace tools, wrapping hosted `web_search` as a function-shaped tool, and adding `strict: false` to function tools before forwarding to vLLM. This fixed the initial 400 in the live CSVQL run, but the best `-WriteFileTool` attempt still produced a syntactically broken partial app with no CLI or tests. See `docs\devstral-small-2507.md`.
+
+## Reproducible GLM-4.7-Flash Setup
 
 The first GLM-4.7-Flash baseline used the same virtual environment and served:
 

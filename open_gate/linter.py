@@ -95,6 +95,16 @@ GEMMA_PIPE_TOOL_CALL_RE = re.compile(
     r"<\|tool_call>\s*call:(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*(?P<body>\{.*?\})\s*<tool_call\|>",
     re.IGNORECASE | re.DOTALL,
 )
+KIMI_RESERVED_TOOL_MARKER_RE = re.compile(r"<\|reserved_token_16359[5-9]\|>")
+KIMI_RESERVED_TOOL_CALL_RE = re.compile(
+    r"(?:<\|reserved_token_163595\|>\s*)?"
+    r"<\|reserved_token_163597\|>\s*"
+    r"(?P<name>(?:functions\.)?[A-Za-z_][A-Za-z0-9_.:-]*?)(?::\d+)?\s*"
+    r"<\|reserved_token_163598\|>\s*"
+    r"(?P<body>.*?)(?:<\|reserved_token_163599\|>|<\|reserved_token_163596\|>|$)"
+    r"(?:\s*<\|reserved_token_163596\|>)?",
+    re.DOTALL,
+)
 CODEX_TRANSCRIPT_TOOL_CALL_HEADER_RE = re.compile(
     r"assistant\s+tool\s+call\s+(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)(?:\s+[^\r\n:]*)?:\s*",
     re.IGNORECASE,
@@ -135,6 +145,7 @@ DEEPSEEK_TOOL_CALL_RE = re.compile(
 SUSPICIOUS_PATTERNS = {
     "tool_call_tag": TOOL_CALL_LITERAL_RE,
     "gemma_pipe_tool_marker": GEMMA_PIPE_TOOL_MARKER_RE,
+    "kimi_reserved_tool_marker": KIMI_RESERVED_TOOL_MARKER_RE,
     "function_tag": re.compile(r"<function=", re.IGNORECASE),
     "responses_recipient": re.compile(r"\brecipient_name\b|\bto=functions\.", re.IGNORECASE),
     "tool_namespace": re.compile(r"\b(?:functions|tools)\.[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE),
@@ -181,6 +192,10 @@ def analyze_text(text: str, tools: list[JsonObject] | JsonObject | None = None) 
     calls: list[ToolCall] = []
     errors: list[str] = []
     suspicious_spans: list[tuple[int, int]] = []
+
+    for match in KIMI_RESERVED_TOOL_CALL_RE.finditer(text):
+        suspicious_spans.append(match.span())
+        calls.append(_call_from_kimi_reserved_tool_call(match))
 
     for match in GEMMA_PIPE_TOOL_CALL_RE.finditer(text):
         suspicious_spans.append(match.span())
@@ -298,6 +313,7 @@ def _sanitize_residual_tool_syntax(text: str) -> str:
     cleaned = RESPONSE_TAG_LITERAL_RE.sub("", text)
     cleaned = TOOL_CALL_LITERAL_RE.sub("tool call", cleaned)
     cleaned = GEMMA_PIPE_TOOL_MARKER_RE.sub("tool call", cleaned)
+    cleaned = KIMI_RESERVED_TOOL_MARKER_RE.sub("tool call", cleaned)
     cleaned = RECIPIENT_ASSIGN_RE.sub("", cleaned)
     cleaned = TO_FUNCTIONS_ASSIGN_RE.sub("", cleaned)
     cleaned = re.sub(r"\brecipient_name\b", "recipient name", cleaned, flags=re.IGNORECASE)
@@ -340,6 +356,22 @@ def _call_from_gemma_pipe_tool_call(match: re.Match[str]) -> ToolCall:
         name=match.group("name"),
         arguments=_gemma_pipe_tool_call_arguments(match.group("body")),
         source="gemma_pipe_tool_call",
+        span=match.span(),
+        raw=match.group(0),
+    )
+
+
+def _call_from_kimi_reserved_tool_call(match: re.Match[str]) -> ToolCall:
+    name = match.group("name")
+    if name.startswith("functions."):
+        name = name.split(".", 1)[1]
+    body = match.group("body").strip()
+    parsed = _json_loads_relaxed(body)
+    args = parsed if isinstance(parsed, dict) else {"value": body}
+    return ToolCall(
+        name=name,
+        arguments=args,
+        source="kimi_reserved_tool_call",
         span=match.span(),
         raw=match.group(0),
     )

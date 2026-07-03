@@ -106,6 +106,33 @@ class LinterTests(unittest.TestCase):
         self.assertTrue(report.tool_calls[0].valid)
         self.assertEqual(report.cleaned_text, "")
 
+    def test_kimi_reserved_token_tool_call_is_extracted_and_cleaned(self) -> None:
+        tools = [
+            {
+                "type": "function",
+                "name": "ping",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}},
+                    "required": ["x"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        report = analyze_text(
+            '<|reserved_token_163595|><|reserved_token_163597|>functions.ping:0<|reserved_token_163598|>{"x": "ok"}<|reserved_token_163599|><|reserved_token_163596|>',
+            tools,
+        )
+
+        self.assertEqual(len(report.tool_calls), 1)
+        self.assertEqual(report.tool_calls[0].name, "ping")
+        self.assertEqual(report.tool_calls[0].source, "kimi_reserved_tool_call")
+        self.assertEqual(report.tool_calls[0].arguments["x"], "ok")
+        self.assertTrue(report.tool_calls[0].valid)
+        self.assertEqual(report.cleaned_text, "")
+        self.assertIn("parsed_tool_call", report.leaks)
+        self.assertIn("kimi_reserved_tool_marker", report.leaks)
+
     def test_gemma_pipe_tool_call_is_extracted_and_cleaned(self) -> None:
         report = analyze_text(
             '<|tool_call>call:superpowers:brainstorming{message:<|"|>Plan the implementation.<|"|>}<tool_call|>',

@@ -126,6 +126,8 @@ Tool-call cleanliness is necessary but not the goal; the goal is real software. 
 
 Takeaways: once Open Gate cleans the channel, **capability is the deciding variable** — capable models ship, the weak one fabricates. Channel repair is necessary, not sufficient, and its outcome value is largest for mid-capability models (a strong model self-recovers; a weak one fails regardless). For a Responses-native model like Ornith, Open Gate's translation job is a no-op, but its command-quality repair still earns its keep as a reliability/latency gate (repair-off runs thrash and time out). The Ornith Delaunay app's triangulation was verified correct out of band (Bowyer-Watson, zero empty-circumcircle violations across ~97k checks). Full detail in `docs\benchmark-notes.md` and `docs\ornith.md`.
 
+The later `csvql_only` probe is harder than `software_build/expense_cli`: it asks for a small SQL engine, package, CLI, tests, README, and manual query verification. GLM-4.5-Air-NVFP4 is parked there: the endpoint and parser worked, but the best 64k run produced only CSV files plus an empty package marker. Kimi-Linear-48B-A3B-NVFP4 is parked earlier in the loop: native and flattened runs made zero tool calls and created zero files. MiniMax-M3-MXFP8 never reached the loop on the GX10 because model construction exhausted memory before `/v1/models` came up. Devstral-Small-2507 did enter the file-writing loop and landed a partial workspace, but the engine was syntactically broken and the CLI/tests were missing. Qwen3-Coder-Next through Qwen Code at 128k avoided the first context compression failure, but drifted into a different single-file demo and never produced the requested CSVQL package, fixtures, CLI, or tests. The shareable prompt, pass criteria, and verifier commands are in `docs\csvql-local-agent-challenge.md`. See `docs\glm-4-5-air-nvfp4.md`, `docs\kimi-linear-nvfp4.md`, `docs\minimax-m3-mxfp8.md`, `docs\devstral-small-2507.md`, and `docs\qwen3-coder-next.md`.
+
 ## Models
 
 Per-model setup, repair evidence, and live status:
@@ -133,8 +135,12 @@ Per-model setup, repair evidence, and live status:
 | Model | Status | Notes |
 | --- | --- | --- |
 | [Ornith-1.0-35B](docs/ornith.md) | **known-good (app gate)** | uncensored NVFP4 MoE, Responses-native, shipped the full app suite + Delaunay |
-| [Qwen3-Coder-Next](docs/qwen3-coder-next.md) | known-good baseline | `43/60` → `60/60` repaired on the serious suite |
+| [Qwen3-Coder-Next](docs/qwen3-coder-next.md) | known-good baseline; CSVQL unpassed | `43/60` → `60/60` repaired on the serious suite; Qwen Code 128k drifted on CSVQL |
 | [GLM-4.7-Flash](docs/benchmark-notes.md) | repaired dialect | `2/20` → `20/20` repair/full |
+| [GLM-4.5-Air-NVFP4](docs/glm-4-5-air-nvfp4.md) | parked (behavior) | tool probe passed; live CSVQL 131k/64k runs failed to create a runnable app |
+| [Kimi-Linear-48B-A3B-NVFP4](docs/kimi-linear-nvfp4.md) | parked (tool interface) | plain Responses sanity passed; tool probes and live CSVQL produced no executable calls |
+| [MiniMax-M3-MXFP8](docs/minimax-m3-mxfp8.md) | parked (deployment) | vLLM recognized the architecture, but 64k serving OOMed on the 119 GiB GX10 before an endpoint came up |
+| [Devstral-Small-2507](docs/devstral-small-2507.md) | parked (behavior) | plain Responses and forced tools worked; live CSVQL write-file run produced broken Python and no CLI/tests |
 | [DeepSeek-Coder-V2-Lite](docs/deepseek-coder-v2-lite.md) | parked (behavior) | `9/60` → `48/60` repaired; protocol-clean, behavior-limited |
 | [Gemma-4-E4B-IT](docs/gemma-4-e4b-it.md) | parked (runtime) | smoke-clean; larger build gate failed with no artifacts |
 | [Qwen3.6-27B](docs/qwen3-6-27b.md) | parked (protocol) | native Responses protocol issues |
@@ -240,6 +246,12 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_codex_live_benchmark.
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_codex_live_benchmark.ps1 -Mode observe -Runs 3 -Label codex_live_observe
 ```
 
+For a constrained-context probe where the default output reserve would crowd the prompt, cap it explicitly:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_codex_live_benchmark.ps1 -Suite fixtures\codex_live\csvql_only.json -Mode repair -ModelContextWindow 65536 -UpstreamMaxOutputTokens 16384
+```
+
 The software-build stress suite with a disposable working folder:
 
 ```powershell
@@ -313,7 +325,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_validation_loop.ps1 -
 - Proxy mode defaults to request-diet `auto` policies, digesting oversized Codex instructions and compacting oversized tool schemas before forwarding to vLLM.
 - Streamed proxy requests emit real Responses lifecycle/heartbeat events while waiting for vLLM, then replay the normalized response as Responses SSE events.
 - Every request is written to `captures/` with sensitive headers redacted.
-- `open_gate.linter` extracts leaked tool calls from XML tags, GLM `<arg_key>/<arg_value>` tags, DeepSeek/vLLM delimiter blocks, bare `recipient_name=functions.*` headers, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
+- `open_gate.linter` extracts leaked tool calls from XML tags, GLM `<arg_key>/<arg_value>` tags, DeepSeek/vLLM delimiter blocks, Kimi reserved-token blocks, bare `recipient_name=functions.*` headers, JSON tool-call arrays, fenced JSON, and Pythonic `functions.tool({...})` calls.
 - `open_gate.command_quality` detects structured tool calls that parse as JSON but are likely to fail inside Codex (executable-only calls, empty artifact writes, bare PowerShell cmdlets/aliases, split `-Command` arrays, nested PowerShell, Windows PowerShell `&&`, bad here-strings, malformed JSON-array scripts, fragile Python one-liners, full-page web fetches, non-image `view_image` paths).
 - With `--write-file-tool`, Open Gate injects an optional `write_file(path, content)` tool into the upstream request, advertises it in the guardrail, and translates each returned call into a robust base64 `shell` write — so local models can write files via JSON args while Codex still only sees `shell`.
 - `open_gate.regression` replays captured upstream responses through normalization as stable fixtures.

@@ -286,6 +286,7 @@ def transform_upstream_request(
     capability_reason = capability_flatten_reason(original_input, upstream_capabilities)
     if write_file_tool:
         inject_write_file_tool(request_body)
+    tool_compatibility = normalize_upstream_tool_schemas(request_body)
     tools = request_body.get("tools") if isinstance(request_body.get("tools"), list) else []
     context_forces_flatten = (
         upstream_input_mode == "auto" and context_policy == "spoon" and isinstance(original_input, list)
@@ -306,6 +307,7 @@ def transform_upstream_request(
             "context_policy": context_policy,
             "original_input_items": len(original_input) if isinstance(original_input, list) else None,
             **guardrail,
+            **tool_compatibility,
             **diet,
         }
 
@@ -340,6 +342,7 @@ def transform_upstream_request(
         "original_input_items": len(original_input) if isinstance(original_input, list) else None,
         **compiled.metadata,
         **guardrail,
+        **tool_compatibility,
         **diet,
     }
 
@@ -508,6 +511,63 @@ def build_instruction_digest(_instructions: str) -> str:
 
 def compact_tool_schemas(tools: list[Any]) -> list[Any]:
     return [compact_tool_schema(tool) for tool in tools]
+
+
+def normalize_upstream_tool_schemas(request_body: JsonObject) -> JsonObject:
+    tools = request_body.get("tools")
+    if not isinstance(tools, list):
+        return {"unsupported_tools_removed": 0, "hosted_tools_wrapped": 0, "function_tools_strict_added": 0}
+
+    filtered: list[Any] = []
+    removed: list[str] = []
+    hosted_wrapped = 0
+    strict_added = 0
+    for tool in tools:
+        if not isinstance(tool, dict):
+            removed.append(type(tool).__name__)
+            continue
+        if tool.get("type") == NATIVE_WEB_SEARCH_TOOL:
+            filtered.append(web_search_function_tool_schema())
+            hosted_wrapped += 1
+            continue
+        if tool.get("type") != "function" or not isinstance(tool.get("name"), str) or not tool.get("name"):
+            removed.append(str(tool.get("name") or tool.get("type") or "unnamed"))
+            continue
+        if not isinstance(tool.get("strict"), bool):
+            tool = deepcopy(tool)
+            tool["strict"] = False
+            strict_added += 1
+        filtered.append(tool)
+
+    if len(filtered) != len(tools):
+        request_body["tools"] = filtered
+    elif strict_added:
+        request_body["tools"] = filtered
+
+    return {
+        "unsupported_tools_removed": len(removed),
+        "unsupported_tool_names_removed": removed[:20],
+        "hosted_tools_wrapped": hosted_wrapped,
+        "function_tools_strict_added": strict_added,
+    }
+
+
+def web_search_function_tool_schema() -> JsonObject:
+    return {
+        "type": "function",
+        "name": NATIVE_WEB_SEARCH_TOOL,
+        "description": "Hosted web search placeholder. Open Gate routes returned URL lookups to a bounded shell metadata fetch when possible.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "url": {"type": "string"},
+                "external_web_access": {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+        "strict": False,
+    }
 
 
 def compact_tool_schema(tool: Any) -> Any:

@@ -1,0 +1,15 @@
+{
+  "name": "codex_live_csvql_only",
+  "description": "Single live Codex case that asks a local model behind OpenGate to build a zero-dependency Python SQL query engine over CSV files.",
+  "cases": [
+    {
+      "id": "csvql",
+      "category": "software_build_cli",
+      "cwd": "csvql",
+      "expected_tools": [
+        "shell"
+      ],
+      "prompt": "Build a zero-dependency Python SQL query engine over CSV files. Work only in this folder.\nNo external packages; stdlib only (csv, argparse, etc.). Create the csvql/ package,\nrun_csvql.py, README.md, and a tests/ suite you run with pytest.\nCLI: run as  python -m csvql --query QUERY --table customers=customers.csv --table orders=orders.csv\n     (or python run_csvql.py with the same arguments). QUERY is one SQL statement passed as the\n     --query value (the shell quotes it). Print result rows to stdout, one per line,\n     comma-separated, with a header row first. Exit 0 on success, nonzero on error.\nSQL surface (implement all):\n  - SELECT col, col, * / FROM table\n  - WHERE with =, <, >, <=, >=, <>, AND, OR, NOT, string literals ('...'), numeric literals\n  - ORDER BY col [ASC|DESC], LIMIT n [OFFSET m]\n  - INNER JOIN ... ON (two tables, aliased: customers c JOIN orders o ON c.id = o.customer_id)\n  - GROUP BY col with COUNT(*), COUNT(col), SUM(col), AVG(col), MIN(col), MAX(col),\n    column aliases via AS, and HAVING <aggregate bool>\n  - table and column aliases\nCreate customers.csv and orders.csv with this exact content:\ncustomers.csv:\nid,name,city\n1,Alice,NYC\n2,Bob,LA\n3,Carol,NYC\n4,Dave,SF\norders.csv:\nid,customer_id,amount,category\n101,1,30.00,food\n102,1,45.00,toys\n103,2,120.00,food\n104,3,15.00,books\n105,3,25.00,books\n106,4,200.00,food\n107,2,55.00,toys\nWrite a pytest suite covering each SQL feature, run it, and fix every failure.\nThen run these queries by hand and include the commands and their output:\n  1. SELECT name, city FROM customers WHERE city = 'NYC'\n  2. SELECT name FROM customers ORDER BY name DESC LIMIT 2\n  3. SELECT c.name, o.amount FROM customers c JOIN orders o ON c.id = o.customer_id\n     WHERE o.category = 'books' ORDER BY o.amount\n  4. SELECT c.city, COUNT(*) AS n, SUM(o.amount) AS total\n     FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.city ORDER BY c.city\nKeep the final answer short and include the commands you ran."
+    }
+  ]
+}

@@ -24,6 +24,8 @@ param(
     [int]$CaseTimeoutSeconds = 420,
     [int]$Runs = 1,
     [int]$ModelContextWindow = 0,
+    [int]$UpstreamMaxOutputTokens = 0,
+    [switch]$WriteFileTool,
     [string]$Label = "codex_live_smoke",
     [string]$OutputRoot = "runs\codex-live",
     [switch]$DryRun
@@ -93,6 +95,8 @@ if ($DryRun) {
         codex_cwd = $CodexCwd
         suite = $suitePath.Path
         runs = $Runs
+        upstream_max_output_tokens = $UpstreamMaxOutputTokens
+        write_file_tool = [bool]$WriteFileTool
         cases = @($suiteJson.cases).Count
         would_write_under = (Join-Path $Root.Path $OutputRoot)
     } | ConvertTo-Json -Depth 4
@@ -126,30 +130,40 @@ $manifest = [ordered]@{
     suite = $suitePath.Path
     runs = $Runs
     model_context_window = $ModelContextWindow
+    upstream_max_output_tokens = $UpstreamMaxOutputTokens
+    write_file_tool = [bool]$WriteFileTool
     capture_dir = $captureDir
     cases = @()
 }
 
 $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds, $UpstreamTimeout)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds, $UpstreamTimeout, $UpstreamMaxOutput, $UseWriteFileTool)
     Set-Location -LiteralPath $RootPath
-    python -m open_gate `
-        --host 127.0.0.1 `
-        --port $PortNumber `
-        --model $ModelName `
-        --capture-dir $CapturePath `
-        --upstream $Upstream `
-        --normalization-mode $ProxyMode `
-        --context-policy $CtxPolicy `
-        --context-max-chars $CtxMaxChars `
-        --context-recent-items $CtxRecentItems `
-        --instruction-policy $InstrPolicy `
-        --tool-schema-policy $SchemaPolicy `
-        --capability-probe $CapabilityProbeMode `
-        --capability-probe-timeout $CapabilityProbeSeconds `
-        --upstream-timeout $UpstreamTimeout `
-        --quiet
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout, $UpstreamTimeoutSeconds
+    $serverArgs = @(
+        "--host", "127.0.0.1",
+        "--port", $PortNumber,
+        "--model", $ModelName,
+        "--capture-dir", $CapturePath,
+        "--upstream", $Upstream,
+        "--normalization-mode", $ProxyMode,
+        "--context-policy", $CtxPolicy,
+        "--context-max-chars", $CtxMaxChars,
+        "--context-recent-items", $CtxRecentItems,
+        "--instruction-policy", $InstrPolicy,
+        "--tool-schema-policy", $SchemaPolicy,
+        "--capability-probe", $CapabilityProbeMode,
+        "--capability-probe-timeout", $CapabilityProbeSeconds,
+        "--upstream-timeout", $UpstreamTimeout,
+        "--quiet"
+    )
+    if ($UpstreamMaxOutput -gt 0) {
+        $serverArgs += @("--upstream-max-output-tokens", $UpstreamMaxOutput)
+    }
+    if ($UseWriteFileTool) {
+        $serverArgs += "--write-file-tool"
+    }
+    python -m open_gate @serverArgs
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout, $UpstreamTimeoutSeconds, $UpstreamMaxOutputTokens, ([bool]$WriteFileTool)
 
 try {
     $health = $null

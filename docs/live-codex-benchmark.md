@@ -47,6 +47,8 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_codex_live_benchmark.
   -Label glm47_software_build
 ```
 
+For constrained-context model probes, add `-UpstreamMaxOutputTokens <n>`. The live harness forwards this to OpenGate as `--upstream-max-output-tokens` and records it in `manifest.json` as `upstream_max_output_tokens`. This is useful when Codex's default output reservation would consume too much of a 64k window; it is a measurement knob, not a repair.
+
 Run a baseline comparison:
 
 ```powershell
@@ -105,6 +107,88 @@ Open Gate `0.6.6` changes the stream keepalive path to real Responses heartbeat 
 - `habit_tracker_web`: build and verify a single-file localStorage habit tracker.
 
 The suite is intentionally write-heavy. It is designed to test whether the model can make progress through Codex's real tool loop, not just whether Open Gate can hide leaked tool syntax.
+
+## CSVQL Suite
+
+`fixtures\codex_live\csvql_only.json` contains one harder single-case build: a zero-dependency Python SQL query engine over CSV files. It requires a package, CLI entry point, sample CSVs, README, pytest coverage, and manual query checks for filtering, ordering, joins, grouping, aggregation, aliases, and HAVING.
+
+The point is to make fabrication and partial file custody obvious. A model has not passed this case unless the produced workspace can be executed independently, regardless of the final assistant message.
+
+For a shareable version of the exact prompt, pass criteria, verifier commands, and expected manual outputs, see `docs\csvql-local-agent-challenge.md`.
+
+## 2026-07-02/03 GLM-4.5-Air-NVFP4 CSVQL
+
+Model: `GLM-4.5-Air-NVFP4`, served from `Firworks/GLM-4.5-Air-nvfp4` with vLLM nightly aarch64, `glm47` tool and reasoning parsers.
+
+Summary:
+
+| Run | Context Window | Output Cap | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260702-180525-glm45airnv_csvql-repair` | 131072 | 32768 default | 16 | 0 | 15 | 6 | failed partial app; final response hit `max_output_tokens` |
+| `20260702-200142-glm45airnv_csvql_64k-repair` | 65536 | 32768 default | 7 | 1 | 6 | 1 | failed upstream 400 because prompt plus output reserve exceeded 64k |
+| `20260702-200615-glm45airnv_csvql_64k_cap16k-repair` | 65536 | 16384 | 24 | 0 | 23 | 3 | failed behavior; only CSV files plus an empty package marker landed |
+
+The capped 64k run is the relevant behavior result. It avoided the context-window error and returned zero invalid tool calls after OpenGate normalization, but the final capture contained XML-ish `write_file` text in the assistant message instead of structured executable tool calls. The workspace had no engine, parser, CLI, README, or tests. Independent checks failed for both `python -m csvql ...` and `python run_csvql.py ...`.
+
+Conclusion: GLM-4.5-Air-NVFP4 is parked for this benchmark. The failure is not a new OpenGate repair target; it is an inability to complete the app under the live Codex harness. Detailed notes are in `docs\glm-4-5-air-nvfp4.md`.
+
+## 2026-07-02/03 Kimi-Linear-48B-A3B-NVFP4 CSVQL
+
+Model: `Kimi-Linear-48B-A3B-NVFP4`, served from `Firworks/Kimi-Linear-48B-A3B-Instruct-nvfp4` with vLLM nightly aarch64, `--max-model-len 65536`, `--enable-auto-tool-choice`, and `--tool-call-parser kimi_k2`.
+
+Summary:
+
+| Run | Context Policy | Output Cap | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260702-212631-kimi_linear_nvfp4_csvql_64k-repair` | `full` / native Responses | 16384 | 1 | 0 | 0 | 0 | failed immediately; unrelated email-analytics answer |
+| `20260702-212847-kimi_linear_nvfp4_csvql_64k_spoon-repair` | `spoon` / flattened transcript | 16384 | 1 | 0 | 0 | 0 | failed after 179 s; unrelated puzzle/fish answer |
+
+Both runs completed from Codex's perspective, but neither entered the tool loop. The workspace stayed empty. The direct `/v1/responses` plain-text sanity probe worked, while minimal tool probes did not produce structured tool calls. OpenGate now has a generic parser for Kimi reserved-token tool-call text seen during probing, but this live run produced no parseable Kimi tool syntax.
+
+Conclusion: Kimi-Linear-48B-A3B-NVFP4 is parked for this benchmark on the current vLLM stack. This is a tool-interface and prompt-grounding failure, not a partial CSVQL implementation and not a new task-steering repair target.
+
+## 2026-07-02/03 MiniMax-M3-MXFP8 Deployment Probe
+
+Model: `MiniMax-M3-MXFP8`, attempted from `MiniMaxAI/MiniMax-M3-MXFP8` with vLLM nightly aarch64, `--max-model-len 65536`, and `--trust-remote-code`.
+
+The model never reached a usable OpenAI-compatible endpoint, so the CSVQL suite was not run. vLLM accepted the custom architecture and selected the MiniMax MXFP8/sparse-attention path, but the first launch failed during model construction with CUDA OOM on the 119 GiB GX10. A retry with `--cpu-offload-gb 8`, `--kv-cache-dtype fp8`, and `--enforce-eager` reached `UVAOffloader` but saturated host memory and made SSH unresponsive.
+
+Conclusion: MiniMax-M3-MXFP8 is deployment-blocked on this host. Do not score it as a CSVQL failure or add OpenGate repairs from this attempt. Detailed notes are in `docs\minimax-m3-mxfp8.md`.
+
+## 2026-07-02/03 Devstral-Small-2507 CSVQL
+
+Model: `Devstral-Small-2507`, served from `mistralai/Devstral-Small-2507` with vLLM nightly aarch64, Mistral tokenizer/config/load modes, `--max-model-len 65536`, `--enable-auto-tool-choice`, and `--tool-call-parser mistral`.
+
+Summary:
+
+| Run | Variant | Output Cap | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260702-225235-devstral_small_2507_csvql_64k-repair` | before upstream tool schema filter | 16384 | 1 | 1 | 0 | 0 | failed immediately on vLLM tool schema validation |
+| `20260702-225804-devstral_small_2507_csvql_64k_r2-repair` | schema filter, shell only | 16384 | 4 | 0 | 3 | 0 | created directories, then stopped before app files |
+| `20260702-230200-devstral_small_2507_csvql_64k_writefile_r3-repair` | schema filter plus `-WriteFileTool` | 16384 | 9 | 0 | 7 | 5 | partial workspace, syntactically broken engine, no CLI/tests |
+
+The first run drove a valid OpenGate protocol fix: vLLM/Mistral requires function tools with an explicit boolean `strict` field and rejects Codex's hosted/namespace tool shapes. The proxy now filters unsupported upstream tool shapes, adds `strict: false`, and wraps `web_search` into a function-shaped tool before forwarding to vLLM.
+
+The best Devstral run used `-WriteFileTool` and landed `README.md`, the two CSV fixtures, `csvql/__init__.py`, and `csvql/db.py`. Independent checks failed: `csvql/db.py` has a syntax error at `elif expr['op'] == '>/g')`, `python -m csvql ...` fails because `csvql.__main__` is missing, and `python run_csvql.py ...` fails because `run_csvql.py` is missing.
+
+Conclusion: Devstral-Small-2507 is parked for this benchmark. It can run on the GX10 and enter the Codex file-writing loop, but it did not complete a runnable CSVQL application. Detailed notes are in `docs\devstral-small-2507.md`.
+
+## 2026-07-03 Qwen3-Coder-Next Through Qwen Code CSVQL
+
+Model: `Qwen3-Coder-Next`, served from `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` with vLLM nightly aarch64 and `qwen3_coder` tool parser. Harness: Qwen Code CLI `0.19.5`, configured as an OpenAI-compatible provider against `http://<gx10-host>:8000/v1`.
+
+Summary:
+
+| Run | Context Window | Duration | Exit | Files Landed | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `20260703-082748-qwen3_coder_next_qwencode_csvql` | 32768 | 288.224 s | 0 | 1 | wrote one large `csvql.py`, then Qwen Code aborted continuation with context compression failure |
+| `20260703-084553-qwen3_coder_next_qwencode_csvql_128k_r2` | 131072 | 2011.884 s | -1, stopped after drift | 7 | continued past the context issue, but built a different single-file demo and entered a self-debug loop |
+
+The 32k run failed inside Qwen Code's own context manager after the first large file write: estimated prompt tokens `23638` exceeded its safe hard limit of about `20203`, even though the vLLM endpoint itself had a 32k max model length. The model config supports much more context (`max_position_embeddings = 262144`), so the GX10 endpoint was restarted at `--max-model-len 131072` and Qwen Code's `contextWindowSize` was updated to `131072`.
+
+The 128k run proved that larger context fixes the compression ceiling. It did not pass CSVQL. The workspace contained `csvql.py`, `README.md`, `TESTS.md`, `EXAMPLES.md`, `sample_data/employees.csv`, `sample_data/products.csv`, and bytecode, but it missed `customers.csv`, `orders.csv`, `run_csvql.py`, the `csvql/` package, and a pytest suite. Independent checks failed: `python -m csvql --query ...` treated `--query` as a CSV path, `python run_csvql.py ...` failed because the file was missing, and pytest was skipped because there was no tests directory.
+
+Conclusion: Qwen Code plus 128k gives a healthier tool loop than the 32k attempt, but this CSVQL result is still a behavior/artifact drift failure. The model lost the benchmark contract and self-debugged a non-fixture demo rather than producing the requested app. Detailed notes are in `docs\qwen3-coder-next.md`.
 
 ## 2026-05-29 Gemma-4-E4B-IT Smoke
 

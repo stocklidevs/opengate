@@ -398,6 +398,37 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertEqual(details["promoted_tool_calls"][0]["source"], "glm_tool_call_tag")
         self.assertEqual(details["stripped_text_items"], 1)
 
+    def test_promotes_kimi_reserved_token_tool_call(self) -> None:
+        response = {
+            "id": "resp_test",
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "<|reserved_token_163595|><|reserved_token_163597|>"
+                                "functions.shell:0<|reserved_token_163598|>"
+                                '{"command": ["powershell.exe", "-Command", "Get-ChildItem -Force"]}'
+                                "<|reserved_token_163599|><|reserved_token_163596|>"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        normalized, details = normalize_responses_response(response, self.request("Inspect the workspace with shell."))
+
+        self.assertEqual(normalized["output"][0]["type"], "function_call")
+        self.assertEqual(normalized["output"][0]["name"], "shell")
+        self.assertIn("Get-ChildItem -Force", normalized["output"][0]["arguments"])
+        self.assertEqual(details["promoted_tool_calls"][0]["source"], "kimi_reserved_tool_call")
+        self.assertEqual(details["stripped_text_items"], 1)
+
     def test_promotes_deepseek_v3_delimited_tool_call(self) -> None:
         response = {
             "id": "resp_test",
@@ -1964,6 +1995,45 @@ class ProxyNormalizationTests(unittest.TestCase):
         self.assertLessEqual(len(namespace_tool["description"]), 220)
         self.assertLessEqual(len(nested_tools[0]["description"]), 220)
         self.assertLessEqual(len(nested_tools[0]["parameters"]["properties"]["code"]["description"]), 120)
+
+    def test_transform_filters_upstream_unsupported_tool_shapes(self) -> None:
+        request = {
+            "model": "Devstral-Small-2507",
+            "tools": [
+                TOOLS[0],
+                {"type": "web_search"},
+                {"type": "image_generation"},
+                {
+                    "type": "namespace",
+                    "name": "mcp__node_repl__",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "js",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                },
+                {
+                    "type": "function",
+                    "name": "write_file",
+                    "description": "Write a file.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            ],
+            "input": "Create csvql.",
+        }
+
+        details = transform_upstream_request(request, "auto")
+
+        self.assertEqual(details["unsupported_tools_removed"], 2)
+        self.assertEqual(details["hosted_tools_wrapped"], 1)
+        self.assertEqual(
+            details["unsupported_tool_names_removed"],
+            ["image_generation", "mcp__node_repl__"],
+        )
+        self.assertEqual([tool["name"] for tool in request["tools"]], ["shell", "web_search", "write_file"])
+        self.assertEqual([tool["strict"] for tool in request["tools"]], [False, False, False])
 
     def test_transform_applies_request_diet_after_spooning(self) -> None:
         request = {

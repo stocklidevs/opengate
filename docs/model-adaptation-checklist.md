@@ -75,6 +75,10 @@ Current model notes:
 - `docs\qwen3-6-27b.md` prepares Qwen3.6-27B setup, benchmark commands, and result placeholders.
 - `docs\deepseek-coder-v2-lite.md` records DeepSeek-Coder-V2-Lite setup, repaired synthetic/live protocol status, and the parked behavior-limited decision.
 - `docs\gemma-4-e4b-it.md` records Gemma-4-E4B-IT setup, repair evidence, and the current live-smoke-clean decision.
+- `docs\glm-4-5-air-nvfp4.md` records GLM-4.5-Air-NVFP4 serving facts, CSVQL live runs, the 64k output-cap finding, and the parked behavior-limited decision.
+- `docs\kimi-linear-nvfp4.md` records Kimi-Linear-48B-A3B-NVFP4 serving facts, direct tool probes, CSVQL live runs, and the parked tool-interface decision.
+- `docs\minimax-m3-mxfp8.md` records MiniMax-M3-MXFP8 serving attempts, the GX10 memory/OOM blocker, and the deployment-blocked decision.
+- `docs\devstral-small-2507.md` records Devstral-Small-2507 serving facts, direct tool probes, CSVQL live runs, the upstream tool-schema normalization fix, and the parked artifact-completion decision.
 - `docs\benchmark-notes.md` contains the cross-model adaptation scorecard.
 
 ## 9. Version And Evidence
