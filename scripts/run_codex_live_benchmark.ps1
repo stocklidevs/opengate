@@ -6,6 +6,8 @@ param(
     [string]$Suite = "fixtures\codex_live\smoke.json",
     [ValidateSet("repair", "observe")]
     [string]$Mode = "repair",
+    [ValidateSet("auto", "native", "flatten")]
+    [string]$UpstreamInputMode = "auto",
     [ValidateSet("full", "spoon")]
     [string]$ContextPolicy = "full",
     [int]$ContextMaxChars = 60000,
@@ -26,6 +28,7 @@ param(
     [int]$ModelContextWindow = 0,
     [int]$UpstreamMaxOutputTokens = 0,
     [switch]$WriteFileTool,
+    [switch]$DisableWriteFileTool,
     [string]$Label = "codex_live_smoke",
     [string]$OutputRoot = "runs\codex-live",
     [switch]$DryRun
@@ -34,6 +37,9 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location -LiteralPath $Root.Path
+if ($WriteFileTool -and $DisableWriteFileTool) {
+    throw "Use either -WriteFileTool or -DisableWriteFileTool, not both."
+}
 
 $suitePath = Resolve-Path $Suite
 $suiteJson = Get-Content -Raw -LiteralPath $suitePath.Path | ConvertFrom-Json
@@ -79,6 +85,7 @@ function Get-CodexPromptSandbox {
 if ($DryRun) {
     [ordered]@{
         mode = $Mode
+        upstream_input_mode = $UpstreamInputMode
         context_policy = $ContextPolicy
         context_max_chars = $ContextMaxChars
         context_recent_items = $ContextRecentItems
@@ -97,6 +104,7 @@ if ($DryRun) {
         runs = $Runs
         upstream_max_output_tokens = $UpstreamMaxOutputTokens
         write_file_tool = [bool]$WriteFileTool
+        disable_write_file_tool = [bool]$DisableWriteFileTool
         cases = @($suiteJson.cases).Count
         would_write_under = (Join-Path $Root.Path $OutputRoot)
     } | ConvertTo-Json -Depth 4
@@ -113,6 +121,7 @@ $manifest = [ordered]@{
     run_id = $runId
     created_at = (Get-Date).ToUniversalTime().ToString("o")
     mode = $Mode
+    upstream_input_mode = $UpstreamInputMode
     context_policy = $ContextPolicy
     context_max_chars = $ContextMaxChars
     context_recent_items = $ContextRecentItems
@@ -132,12 +141,13 @@ $manifest = [ordered]@{
     model_context_window = $ModelContextWindow
     upstream_max_output_tokens = $UpstreamMaxOutputTokens
     write_file_tool = [bool]$WriteFileTool
+    disable_write_file_tool = [bool]$DisableWriteFileTool
     capture_dir = $captureDir
     cases = @()
 }
 
 $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
-    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds, $UpstreamTimeout, $UpstreamMaxOutput, $UseWriteFileTool)
+    param($RootPath, $PortNumber, $Upstream, $ModelName, $CapturePath, $ProxyMode, $InputMode, $CtxPolicy, $CtxMaxChars, $CtxRecentItems, $InstrPolicy, $SchemaPolicy, $CapabilityProbeMode, $CapabilityProbeSeconds, $UpstreamTimeout, $UpstreamMaxOutput, $UseWriteFileTool, $DisableWriteFileTool)
     Set-Location -LiteralPath $RootPath
     $serverArgs = @(
         "--host", "127.0.0.1",
@@ -146,6 +156,7 @@ $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
         "--capture-dir", $CapturePath,
         "--upstream", $Upstream,
         "--normalization-mode", $ProxyMode,
+        "--upstream-input-mode", $InputMode,
         "--context-policy", $CtxPolicy,
         "--context-max-chars", $CtxMaxChars,
         "--context-recent-items", $CtxRecentItems,
@@ -162,8 +173,11 @@ $serverJob = Start-Job -Name "open-gate-codex-live-$Mode" -ScriptBlock {
     if ($UseWriteFileTool) {
         $serverArgs += "--write-file-tool"
     }
+    if ($DisableWriteFileTool) {
+        $serverArgs += "--no-write-file-tool"
+    }
     python -m open_gate @serverArgs
-} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout, $UpstreamTimeoutSeconds, $UpstreamMaxOutputTokens, ([bool]$WriteFileTool)
+} -ArgumentList $Root.Path, $Port, $UpstreamBaseUrl, $Model, $captureDir, $Mode, $UpstreamInputMode, $ContextPolicy, $ContextMaxChars, $ContextRecentItems, $InstructionPolicy, $ToolSchemaPolicy, $CapabilityProbe, $CapabilityProbeTimeout, $UpstreamTimeoutSeconds, $UpstreamMaxOutputTokens, ([bool]$WriteFileTool), ([bool]$DisableWriteFileTool)
 
 try {
     $health = $null

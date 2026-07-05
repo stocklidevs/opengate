@@ -42,6 +42,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(merged["port"], 9999)
         self.assertEqual(merged["context_policy"], "spoon")
 
+    def test_cli_false_overrides_config_true(self) -> None:
+        merged = merge_config(
+            {"write_file_tool": True},
+            {"write_file_tool": False},
+        )
+
+        self.assertFalse(merged["write_file_tool"])
+
     def test_discovers_local_opengate_toml(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "opengate.toml"

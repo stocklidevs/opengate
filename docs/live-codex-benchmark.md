@@ -173,6 +173,37 @@ The best Devstral run used `-WriteFileTool` and landed `README.md`, the two CSV 
 
 Conclusion: Devstral-Small-2507 is parked for this benchmark. It can run on the GX10 and enter the Codex file-writing loop, but it did not complete a runnable CSVQL application. Detailed notes are in `docs\devstral-small-2507.md`.
 
+## 2026-07-05 Qwen3.6-27B Q8_0 Through OpenGate/Codex CSVQL
+
+Model: `Qwen3.6-27B-Q8_0`, same ggml-org Q8_0 GGUF and llama.cpp endpoint used by the passing Qwen Code run, with `-c 262144`, `-ngl all`, flash attention enabled, and OpenGate/Codex configured with `model_context_window=262144`.
+
+Summary:
+
+| Run | Variant | Output Cap | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260705-144755-qwen36_27b_q8_0_262k_ogcodex_csvql_writefile-repair` | native input, write-file config active | 16384 | 1 | 1 | 0 | 0 | failed immediately on Qwen Jinja role ordering |
+| `20260705-145052-qwen36_27b_q8_0_262k_ogcodex_csvql_writefile_flatten-repair` | forced flattened input, write-file injection active | 16384 | 20+ before stop | 0 | active | 3 | repeated `csvql/__init__.py` writes |
+| `20260705-151104-qwen36_27b_q8_0_262k_ogcodex_csvql_flatten_no_writefile-repair` | forced flattened input, write-file explicitly disabled | 16384 | 11 | 0 | 10 started / 7 completed | 4 | aborted too early while remote decoding was still active |
+| `20260705-153826-qwen36_27b_q8_0_262k_ogcodex_csvql_flatten_no_writefile_r2-repair` | same clean setup, long guard | 16384 | 39 | 0 | 34 started / 24 completed | 12 | full CSVQL pass in about 53m12s |
+
+The native attempt did not measure model behavior: llama.cpp's Qwen chat template rejected Codex's native transcript with `System message must be at the beginning`. Forced flattened input fixed that protocol issue.
+
+The write-file attempt exposed a loop specific to the OpenGate/Codex history shape. Qwen saw `write_file`, used it, OpenGate translated it back into a shell call for Codex, then the next flattened transcript showed shell history. The model repeatedly decided to "switch" to `write_file` and rewrote `csvql/__init__.py`.
+
+The first clean no-write-file run disabled repo-configured write-file injection with the new runner flag `-DisableWriteFileTool`, but it was stopped too early and is now treated as inconclusive. The r2 rerun used the same clean setup and completed. It landed the full package, fixtures, README, `run_csvql.py`, and tests; OpenGate recorded zero upstream errors, zero returned text leaks, zero returned invalid tool calls, and three structured argument repairs.
+
+Independent verification after the r2 benchmark exited:
+
+```text
+PYTHONPYCACHEPREFIX=C:\tmp\og-csvql-compile-cache-r2 python -m compileall -q csvql run_csvql.py
+python -B -m pytest -q
+30 passed in 0.19s
+```
+
+Manual CLI checks also matched the challenge outputs: NYC filtering returned Alice and Carol, descending order plus limit returned Dave and Carol, the books join returned Carol's `15.0` and `25.0` rows, and grouped aggregates returned LA/NYC/SF totals. `python run_csvql.py ...` returned the same NYC filter rows as `python -m csvql`.
+
+Conclusion: the Q8_0 model can complete CSVQL through OpenGate/Codex as well as Qwen Code. The critical differences from the failed probes were forced flattened input for llama.cpp/Qwen, disabling injected `write_file`, preserving the full 262k context, and allowing enough wall-clock time for long non-streaming model calls.
+
 ## 2026-07-05 Qwen3.6-27B Q8_0 Through Qwen Code CSVQL
 
 Model: `Qwen3.6-27B-Q8_0`, served from ggml-org's Q8_0 GGUF with llama.cpp `llama-server`, `-c 262144`, `-ngl all`, flash attention enabled, OpenAI-compatible endpoint on the GX10. Harness: Qwen Code CLI `0.19.5`, configured as an OpenAI-compatible provider against `http://<gx10-host>:8002/v1`, with `contextWindowSize = 262144`.

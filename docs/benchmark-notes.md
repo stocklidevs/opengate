@@ -188,6 +188,23 @@ Important caveats:
 
 Interpretation: this result reverses the prior working hypothesis that current local models could not complete the CSVQL challenge unaided. The successful cell is specific: Qwen3.6-27B, Q8_0 GGUF, llama.cpp, Qwen Code, 262k advertised context, and enough wall-clock budget. The run still needed persistence through slow generation and a wall-clock resume, so the learning is not "any Qwen3.6 setup passes." It is that the right quantization/serving/harness combination can cross the artifact-completion line.
 
+## Qwen3.6-27B Q8_0 Through OpenGate/Codex Probe (2026-07-05)
+
+The same `Qwen3.6-27B-Q8_0` llama.cpp endpoint that passed with Qwen Code was rerun through OpenGate/Codex against `fixtures\codex_live\csvql_only.json`, with Codex told the model context window was `262144`.
+
+| Run | Variant | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `20260705-144755-qwen36_27b_q8_0_262k_ogcodex_csvql_writefile-repair` | native input plus write-file config | 1 | 1 | 0 | 0 | Failed before model work: llama.cpp/Qwen Jinja rejected native message ordering with `System message must be at the beginning` |
+| `20260705-145052-qwen36_27b_q8_0_262k_ogcodex_csvql_writefile_flatten-repair` | forced flattened input plus write-file injection | 20+ before stop | 0 | active | 3 | Failed behavior: repeatedly rewrote `csvql/__init__.py` after `write_file` calls were translated back into shell history |
+| `20260705-151104-qwen36_27b_q8_0_262k_ogcodex_csvql_flatten_no_writefile-repair` | forced flattened input, `write_file` explicitly disabled | 11 | 0 | 10 started / 7 completed | 4 | Aborted too early while remote decoding was still active; not a valid failure verdict |
+| `20260705-153826-qwen36_27b_q8_0_262k_ogcodex_csvql_flatten_no_writefile_r2-repair` | same clean setup, rerun with long guard | 39 | 0 | 34 started / 24 completed | 12 | Full CSVQL pass in `3192.153` seconds |
+
+The completed r2 run landed `customers.csv`, `orders.csv`, `csvql/__init__.py`, `csvql/__main__.py`, `csvql/parser.py`, `csvql/engine.py`, `csvql/cli.py`, `run_csvql.py`, `README.md`, and a 30-test pytest suite. Independent verification after the benchmark exited passed compileall with `PYTHONPYCACHEPREFIX` redirected around a local Windows cache ACL issue, returned `30 passed in 0.19s`, and all four challenge queries returned the expected rows. `python run_csvql.py ...` also returned the same NYC filter output as `python -m csvql`.
+
+Two harness learnings came out of this probe. First, the benchmark runner now exposes `-UpstreamInputMode` so llama.cpp/Qwen can be forced through OpenGate's flattened-input path. Second, it now exposes `-DisableWriteFileTool`, because repo config had `write_file_tool = true` and omitting `-WriteFileTool` was not enough to run a shell-only variant.
+
+Interpretation: this is the clean harness-effect comparison we wanted, and it changes the earlier read. Qwen Code was not uniquely required for success. The important OpenGate/Codex conditions were forced flattened input for llama.cpp/Qwen, no injected `write_file` tool, full 262k context, a 16k output cap, and enough wall-clock patience for long non-streaming generations and the repair loop.
+
 ## Devstral-Small-2507 Live CSVQL Probe (2026-07-02/03)
 
 `Devstral-Small-2507` was served from `mistralai/Devstral-Small-2507` with vLLM nightly aarch64, `--max-model-len 65536`, Mistral tokenizer/config/load modes, `--enable-auto-tool-choice`, and `--tool-call-parser mistral`. Full serving notes are in `docs\devstral-small-2507.md`.

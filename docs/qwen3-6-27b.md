@@ -336,6 +336,27 @@ Audit notes:
 
 Interpretation: the Q8_0/Qwen Code path changes the story for Qwen3.6. The earlier vLLM/OpenGate path remains parked for proxy optimization because its failures were not clean OpenGate repair targets. But the model itself, in this GGUF/Qwen Code serving combination with a 262k context budget and enough wall-clock time, did complete the CSVQL application and passed independent verification.
 
+## 2026-07-05 Q8_0 OpenGate/Codex Follow-Up
+
+The same Q8_0 llama.cpp endpoint was tested through OpenGate/Codex to isolate the harness effect from the model and quantization effect.
+
+Runs:
+
+| Run | Variant | Result |
+| --- | --- | --- |
+| `20260705-144755-qwen36_27b_q8_0_262k_ogcodex_csvql_writefile-repair` | native Responses input, write-file config active | Failed immediately with llama.cpp/Qwen Jinja error: `System message must be at the beginning` |
+| `20260705-145052-qwen36_27b_q8_0_262k_ogcodex_csvql_writefile_flatten-repair` | forced flattened input, write-file injection active | Entered a repeat loop rewriting `csvql/__init__.py` |
+| `20260705-151104-qwen36_27b_q8_0_262k_ogcodex_csvql_flatten_no_writefile-repair` | forced flattened input, write-file explicitly disabled | Aborted too early while remote decoding was still active; treated as inconclusive |
+| `20260705-153826-qwen36_27b_q8_0_262k_ogcodex_csvql_flatten_no_writefile_r2-repair` | same clean setup, long guard | Completed CSVQL in `3192.153` seconds with 39 proxy exchanges and 12 non-cache files |
+
+Independent checks on the completed r2 workspace passed: compileall succeeded with `PYTHONPYCACHEPREFIX` redirected around a local Windows cache ACL issue, `python -B -m pytest -q` returned `30 passed in 0.19s`, the four required manual queries returned the expected rows, and `python run_csvql.py ...` matched the `python -m csvql` NYC output. The run produced the package, parser, engine, CLI, `run_csvql.py`, fixtures, README, and `tests/test_csvql.py`.
+
+Harness notes:
+
+- The benchmark runner now exposes `-UpstreamInputMode` so the forced flattened path is reproducible.
+- The benchmark runner and OpenGate CLI now expose `-DisableWriteFileTool` / `--no-write-file-tool`, because `opengate.toml` can otherwise enable write-file injection even when the run command omits `-WriteFileTool`.
+- The OpenGate/Codex result reproduced the Qwen Code pass once native Qwen template issues and write-file transcript confusion were removed. This weakens the "Qwen Code only" interpretation and strengthens the Q8_0 plus large-context plus patience hypothesis.
+
 ## 2026-05-11 Live Reference-Site Fetch
 
 A live Codex run against Qwen3.6 generated a structured shell call to inspect `https://styles.refero.design/` by fetching page content with `Invoke-WebRequest`. OpenGate repaired the shell argument shape, then blocked the call as `unbounded_web_fetch`. Before `0.6.10`, that suppression could leave Codex with only assistant prose when the model also emitted a visible message. OpenGate `0.6.10` changes this into a diagnostic shell quarantine so Codex receives explicit tool feedback and can continue from the prompt instead of appearing stuck.

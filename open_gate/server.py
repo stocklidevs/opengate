@@ -689,11 +689,19 @@ def main() -> int:
         choices=["full", "auto", "compact"],
         help="full forwards tool schemas unchanged; auto/compact trim oversized schema descriptions before forwarding upstream.",
     )
-    parser.add_argument(
+    write_file_group = parser.add_mutually_exclusive_group()
+    write_file_group.add_argument(
         "--write-file-tool",
         action="store_true",
         default=None,
         help="Inject a write_file(path, content) tool for local models; Open Gate translates each call into a robust base64 shell write before Codex sees it.",
+    )
+    write_file_group.add_argument(
+        "--no-write-file-tool",
+        action="store_false",
+        dest="write_file_tool",
+        default=None,
+        help="Disable write_file tool injection, overriding config file defaults.",
     )
     parser.add_argument("--quiet", action="store_true", default=None)
     parser.add_argument("--no-banner", action="store_true", default=None, help="Skip the startup settings banner.")
