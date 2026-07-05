@@ -6,6 +6,8 @@ This checklist tracks the next CSVQL experiment cells after the first confirmed 
 
 The goal is to isolate which part of the winning cell mattered most: model family, quantization fidelity, serving stack, harness, context budget, or wall-clock budget.
 
+Latest learning: the confirmed pass reproduced through both Qwen Code and OG/Codex only for `Qwen3.6-27B-Q8_0` so far. The newest Q8_0 coder-flavored cell, `Qwen3-Coder-30B-A3B-Instruct`, deployed cleanly at 128k but failed by fabricating work. The 35B question is still open, and external reports now also point at a possible Qwen3.6-35B NVFP4 weakness versus GGUF in agentic workflows. Treat experiment 2 as the clean isolation test for that suspicion.
+
 ## Common Acceptance Gate
 
 Each experiment should be marked complete only after an independent verifier, outside the model's own self-report, confirms:
@@ -64,7 +66,7 @@ Use the public challenge prompt and expected outputs from `docs/csvql-local-agen
 
   Target: `ggml-org/Qwen3.6-35B-A3B-GGUF:Q8_0`.
 
-  Purpose: isolate Qwen3.6 model-size/architecture effect under the same high-fidelity GGUF plus Qwen Code pattern. Earlier Qwen3.6-35B-A3B FP8-style runs came close but failed correctness.
+  Purpose: isolate Qwen3.6 model-size/architecture effect under the same high-fidelity GGUF plus Qwen Code pattern. Earlier Qwen3.6-35B-A3B FP8/NVFP4-style runs came close but failed correctness, and outside agentic-workflow reports now suggest the 35B NVFP4 path may underperform the 35B GGUF path.
 
   Suggested setup:
 
@@ -84,7 +86,7 @@ Use the public challenge prompt and expected outputs from `docs/csvql-local-agen
   - Independent verifier:
   - Verdict:
 
-- [ ] **3. Qwen3-Coder-30B-A3B-Instruct-GGUF Q8_0 through Qwen Code**
+- [ ] **3. Qwen3-Coder-30B-A3B-Instruct-GGUF Q8_0**
 
   Target: `Qwen3-Coder-30B-A3B-Instruct` GGUF at `Q8_0`, for example `unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q8_0` or another verified Q8_0 repo.
 
@@ -108,9 +110,27 @@ Use the public challenge prompt and expected outputs from `docs/csvql-local-agen
   - Independent verifier:
   - Verdict:
 
-- [ ] **4. GLM-4.5-Air-GGUF Q8_0 through OG/Codex**
+  OG/Codex 128k subcell:
 
-  Target: `GLM-4.5-Air` GGUF at `Q8_0`, likely from `unsloth/GLM-4.5-Air-GGUF`.
+  - Run folder: `runs\codex-live\20260705-182317-qwen3coder30b_a3b_q8_0_128k_ogcodex_csvql_flatten_no_writefile-repair`
+  - Context window: `131072`
+  - Wall clock: `1170.566` seconds, about 19m31s.
+  - Server memory result: Q8_0 loaded successfully in llama.cpp; 30.53B/A3B MoE, 49/49 layers offloaded, about 30 GiB CUDA model buffer, about 6.4 GiB q8_0 KV cache at 128k.
+  - Commands: forced flattened input with `-UpstreamInputMode flatten`, `-ContextPolicy full`, and `-DisableWriteFileTool`.
+  - Files landed: zero files; only `csvql/` and `csvql/csvql/` directories.
+  - Independent verifier: `python -B -m compileall -q csvql run_csvql.py` failed because `run_csvql.py` did not exist.
+  - Verdict: Failed for the OG/Codex 128k subcell. The model fabricated a completed tool transcript and final success report without creating artifacts. The Qwen Code variant remains untested.
+
+  Attempt notes:
+
+  - The run completed from the Codex harness perspective with zero upstream errors and zero returned invalid tool calls.
+  - The model generated fake `assistant tool call shell ...` transcript text containing pretend file writes and pretend test/manual-query outputs.
+  - OpenGate recorded text leaks and promotion candidates, but did not promote the fake transcript because real structured calls were already present.
+  - Detailed notes are in `docs\qwen3-coder-30b-a3b-instruct-gguf.md`.
+
+- [ ] **4. GLM-4.5-Air-GGUF through OG/Codex**
+
+  Target: `GLM-4.5-Air` GGUF, likely from `unsloth/GLM-4.5-Air-GGUF`. The original high-fidelity target remains `Q8_0`; the first feasibility run used `UD-Q4_K_XL` because Q8_0 is close to the GX10 memory cliff before KV cache.
 
   Purpose: retest GLM under the high-fidelity GGUF hypothesis, but keep the OpenGate/Codex harness because the earlier GLM live CSVQL failures were observed there.
 
@@ -126,14 +146,22 @@ Use the public challenge prompt and expected outputs from `docs/csvql-local-agen
 
   Evidence fields:
 
-  - Run folder:
-  - Context window:
-  - Wall clock:
-  - Server memory result:
-  - Commands:
-  - Files landed:
-  - Independent verifier:
-  - Verdict:
+  - Run folder: `runs\codex-live\20260705-172631-glm45air_udq4xl_64k_ogcodex_csvql_flatten_no_writefile-repair`
+  - Run folder: `runs\codex-live\20260705-173954-glm45air_udq4xl_64k_ogcodex_csvql_auto_no_writefile_r2-repair`
+  - Context window: `65536`
+  - Wall clock: forced-flatten run took `518.578` seconds; auto/native retry took `1313.724` seconds, about 21m54s.
+  - Server memory result: `UD-Q4_K_XL` loaded successfully in llama.cpp; 63.06 GiB GGUF, 48/48 layers offloaded, about 62 GiB CUDA model buffer, about 6.1 GiB q8_0 KV cache at 64k. Q8_0 was not loaded in this pass.
+  - Commands: forced-flatten run used `-UpstreamInputMode flatten`, `-ContextPolicy full`, `-DisableWriteFileTool`; retry used `-UpstreamInputMode auto`, `-ContextPolicy full`, `-DisableWriteFileTool`.
+  - Files landed: forced-flatten run landed two broken nested files; auto/native retry landed zero app files.
+  - Independent verifier: forced-flatten `compileall` failed on invalid bytes in `csvql/__init__.py`, invalid syntax in `csvql/engine.py`, and missing `run_csvql.py`; auto/native `compileall` failed because `csvql` and `run_csvql.py` did not exist.
+  - Verdict: Failed for the `UD-Q4_K_XL` feasibility subcell. The model/server can run on the GX10, but OG/Codex did not get a usable CSVQL app. Q8_0 remains a separate deployment-risk target, not a passed or behavior-measured cell.
+
+  Attempt notes:
+
+  - The forced-flatten run reached artifact attempts, but GLM wrote brittle PowerShell file commands and corrupt Python.
+  - The forced-flatten run ended with a llama.cpp 500 after the flattened transcript exposed a raw `<tool_call>request_plugin_install...</tool_call>` block from an earlier GLM turn.
+  - The auto/native retry avoided that upstream parser error and had zero returned leaks, invalid calls, or command-quality issues, but the model drifted into a 16k-token search for Codex skill files and produced no app files.
+  - Detailed notes are in `docs\glm-4-5-air-gguf.md`.
 
 ## Status Legend
 

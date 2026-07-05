@@ -13,6 +13,8 @@ Checked against direct vLLM and later local OpenAI-compatible serving endpoints:
 - Devstral-Small-2507 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - Qwen3-Coder-Next through Qwen Code CSVQL checked on 2026-07-03.
 - Qwen3.6-27B Q8_0 GGUF through Qwen Code CSVQL checked on 2026-07-05.
+- GLM-4.5-Air GGUF UD-Q4_K_XL through OpenGate/Codex CSVQL checked on 2026-07-05.
+- Qwen3-Coder-30B-A3B-Instruct GGUF Q8_0 through OpenGate/Codex CSVQL checked on 2026-07-05.
 
 ## Suites
 
@@ -109,15 +111,18 @@ This table records the practical Codex-backend status after each model's baselin
 | Qwen3-Coder-Next | `43/60` serious strict successes | `60/60` serious strict successes | Known-good first live smoke | Keep as the known-good local baseline |
 | Qwen3-Coder-Next via Qwen Code | Live CSVQL only; Qwen Code `0.19.5`, GX10 vLLM 128k | n/a | Parked after CSVQL: 32k hit Qwen Code context compression after one big file; 128k continued but drifted into a single-file demo and self-debug loop | Treat as harness/model behavior evidence, not an OpenGate repair target; see `docs/qwen3-coder-next.md` |
 | Qwen3.6-27B Q8_0 via Qwen Code | Live CSVQL only; Qwen Code `0.19.5`, llama.cpp GGUF Q8_0, 262k | n/a | **Passed CSVQL** after one resume past the 120-minute wall guard; `43/43` pytest, manual CLI checks, and `run_csvql.py` all passed | Record as the first local CSVQL pass for this challenge; harness evidence, not an OpenGate repair target; see `docs/qwen3-6-27b.md` |
+| Qwen3.6-27B Q8_0 via OpenGate/Codex | Live CSVQL only; same llama.cpp GGUF Q8_0 endpoint as the Qwen Code pass | n/a | **Passed CSVQL** in the clean r2 run: `30/30` pytest, compileall, manual CLI checks, and `run_csvql.py` all passed | Confirms the win is not Qwen Code-only; forced flatten, no injected `write_file`, 262k context, and long wall-clock were the important harness settings |
 | GLM-4.7-Flash | `2/20` serious strict successes | `20/20` repair/full, `19/20` repair/spoon | Synthetic repair validated | Keep as repaired for the GLM leak dialect |
 | Qwen3.6-27B | `9/9` direct smoke, but `0/20` direct serious due to protocol errors | `14/17` derived strict successes on partial repair/spoon | Parked after live task-progress/runtime failures | Do not optimize further until a clean proxy-layer failure appears |
 | DeepSeek-Coder-V2-Lite-Instruct | `9/60` serious strict successes | `48/60` repair/full, `17/20` repair/spoon | Protocol-clean latest smoke, but behavior-limited | Parked: leaks/protocol are repaired, but the model does not behave reliably enough for Codex; do not repair model behavior |
 | Gemma-4-E4B-IT | `27/60` serious strict successes | `19/20` post-repair repair/full and `19/20` post-repair repair/spoon | Smoke completed 3/3 cleanly, but software-build load later failed with upstream timeouts/connection resets and no artifacts | Parked: not usable reliably with Codex beyond smoke; do not repair model behavior |
 | Ornith-1.0-35B (uncensored NVFP4) | Not run on the serious suite (Qwen-3.5 base = `qwen3_coder` dialect, zero adaptation) | Channel clean on every live app run (all command-quality issues repaired -> 0, 0 leaks) | **Known-good on the `software_build` app gate**: shipped all 3 apps + a correct Delaunay visualizer; Responses-native upstream; ~3-4x faster than Qwen | Keep as a known-good fast Responses-native MoE; see `docs/ornith.md` |
 | GLM-4.5-Air-NVFP4 | Live CSVQL only; synthetic serious suite not run | n/a | Parked after CSVQL: endpoint/tool probe works, but 131k and 64k live runs did not produce a runnable app | Keep as benchmark evidence only; no OpenGate repair target |
+| GLM-4.5-Air GGUF UD-Q4_K_XL | Live CSVQL only; llama.cpp GGUF feasibility cell, 64k | n/a | Parked after CSVQL: forced-flatten wrote corrupt partial files; auto/native retry wrote no app files | GGUF serving path is viable at UD-Q4_K_XL, but CSVQL behavior failed; Q8_0 remains untested due memory risk; see `docs/glm-4-5-air-gguf.md` |
 | Kimi-Linear-48B-A3B-NVFP4 | Live CSVQL only; direct plain `/responses` sanity passed, tool probes did not produce structured calls | n/a | Parked after CSVQL: native and flattened live runs made zero tool calls and created zero files | Treat as a vLLM/Kimi tool-interface mismatch for this stack; see `docs/kimi-linear-nvfp4.md` |
 | MiniMax-M3-MXFP8 | Deployment only; no API endpoint reached | n/a | Blocked before CSVQL: vLLM recognized the MiniMax architecture and MXFP8 path, but model construction OOMed on the 119 GiB GX10 and the offload retry saturated host memory | Treat as deployment-blocked, not a Codex capability result; see `docs/minimax-m3-mxfp8.md` |
 | Devstral-Small-2507 | Live CSVQL only; plain Responses sanity passed, forced tool calls worked | n/a | Parked after CSVQL: write-file run landed partial files, but the engine was syntactically broken and CLI/tests were missing | Treat as behavior/artifact failure after a valid protocol fix; see `docs/devstral-small-2507.md` |
+| Qwen3-Coder-30B-A3B-Instruct Q8_0 via OpenGate/Codex | Live CSVQL only; llama.cpp GGUF Q8_0, 128k | n/a | Failed CSVQL: deployed cleanly but created zero files and fabricated a successful tool transcript | Behavior failure, not memory/context failure; Qwen Code variant remains untested; see `docs/qwen3-coder-30b-a3b-instruct-gguf.md` |
 
 ## Qwen3-Coder-Next Qwen Code CSVQL Probe (2026-07-03)
 
@@ -280,6 +285,14 @@ Comparison against the same CSVQL family of runs:
 | `Qwen3.6-35B-A3B-FP8 r5` | 95 | 113 | 14 | Most complete CSVQL attempt so far, still correctness-failed |
 
 Interpretation: `-UpstreamMaxOutputTokens` is a useful benchmark control for constrained context windows, but it does not change the capability conclusion. GLM-4.5-Air-NVFP4's CSVQL failures are model behavior and artifact-completion failures, not protocol, parser, or command-quality bugs for OpenGate to repair.
+
+## Current Quantization And Harness Learning (2026-07-05)
+
+The strongest local CSVQL evidence now points to high-fidelity GGUF plus a large context window, not simply to newer or larger model names. `Qwen3.6-27B-Q8_0` passed first through Qwen Code and then through OpenGate/Codex when the harness used forced flattened input, disabled injected `write_file`, preserved the 262k context, and waited long enough.
+
+That does not mean every Q8_0 coder-flavored model passes. `Qwen3-Coder-30B-A3B-Instruct-Q8_0` loaded cleanly at 128k and stayed inside context, but failed by fabricating a completed tool transcript and creating zero files. The result argues against a pure deployment or memory explanation.
+
+The 35B-family picture is still unresolved. Our earlier `Qwen3.6-35B-A3B-FP8 r5` and `Qwen3.6-27B-NVFP4` CSVQL attempts were active and artifact-heavy, but both failed independent correctness. An external 2026-07-05 observation also reported poor agentic behavior from Qwen3.6-35B NVFP4 compared with Qwen3.6-35B GGUF. Our data is consistent with that suspicion, but the clean isolation test remains pending: run `Qwen3.6-35B-A3B-GGUF:Q8_0` through the same Qwen Code setup that made 27B pass.
 
 ## Gemma-4-E4B-IT Synthetic Repair Baseline
 
@@ -444,6 +457,56 @@ OpenGate comparison on `qwen_serious_tool_stress`:
 The accepted repair candidates were model-agnostic and are now covered by tests and regression fixtures: parse DeepSeek/vLLM delimited function text into Responses `function_call` items, strip partial DeepSeek close/output markers, treat JSON `function.parameters` as arguments when `function.arguments` is absent, avoid adding diagnostic shell calls after negative-tool-intent no-tool prompts, and neutralize residual literal `<tool_call>` tag text.
 
 Live Codex smoke is no longer protocol-blocked. The first `repair/spoon` smoke completed `3/3` Codex turns without leaks or policy blocks, but all `3/3` upstream requests returned HTTP 400 validation errors because OpenGate's request-diet compaction dropped nested child tools from Codex MCP namespace schemas. OpenGate now preserves nested namespace tools recursively. The latest workspace-write `repair/spoon` smoke recorded `3/3` completed turns, `0` upstream errors, `1` command execution, zero returned leaks, zero returned invalid calls, zero returned command-quality issues, and `returned_clean_capture_rate = 1.0`. It remains behavior-limited, not known-good, because the no-tool documentation answer still includes DeepSeek chat-template preamble text. We are parking it here: the remaining issue is model behavior, and OpenGate should not add task-steering or model-behavior repair for this target.
+
+## Qwen3-Coder-30B-A3B-Instruct GGUF Q8_0 CSVQL
+
+`Qwen3-Coder-30B-A3B-Instruct` was tested from `unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q8_0` through llama.cpp on the GX10, then through OpenGate/Codex at 128k context.
+
+Serving facts:
+
+- llama.cpp served `Qwen3-Coder-30B-A3B-Instruct-Q8_0` with `--ctx-size 131072`, `--n-gpu-layers all`, flash attention, Jinja, reasoning off, and q8_0 KV cache.
+- `/v1/models` reported `n_params = 30532122624`, `n_ctx_train = 262144`, and model blob size `32477962240`.
+- llama.cpp offloaded `49/49` layers to GPU, with about `30658 MiB` CUDA model buffer and `6528 MiB` q8_0 KV cache at 128k.
+
+Live CSVQL run:
+
+| Run | Input Mode | Context | Duration | Exchanges | Upstream Errors | Commands | Files | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260705-182317-qwen3coder30b_a3b_q8_0_128k_ogcodex_csvql_flatten_no_writefile-repair` | forced flatten | 131072 | 1170.566 s | 7 | 0 | 5 | 0 | failed after fabricating a full implementation transcript in assistant text |
+
+The run completed from the harness perspective, with no upstream errors and no returned invalid tool calls, but the artifact was empty. The only workspace entries were directories:
+
+- `csvql/`
+- `csvql/csvql/`
+
+Independent verification failed at the existence gate: `python -B -m compileall -q csvql run_csvql.py` could not list `run_csvql.py`, and there were no package files, fixtures, README, tests, or runnable CLI.
+
+The dominant failure was not a protocol or memory issue. The model emitted a long assistant message containing fake transcript lines such as `assistant tool call shell ...`, pretend file-writing commands, and pretend test/manual-query outputs. OpenGate stripped some text items and blocked promotion of the fake transcript because a real structured call was already present. Codex therefore executed only the few real structured commands, which created directories and then attempted to run missing files. The final model answer nevertheless claimed that `csvql.py`, `run_csvql.py`, CSV fixtures, tests, and README existed and that all manual queries passed.
+
+Conclusion: the Q8_0 GGUF server is healthy and 128k fits comfortably on the GX10, but this model failed the CSVQL build through OG/Codex by fabricating tool execution history instead of creating files. This is a behavior failure and not a new OpenGate repair target unless a future run exposes a generic rule for preventing transcript-style fake work.
+
+## GLM-4.5-Air GGUF UD-Q4_K_XL CSVQL
+
+`GLM-4.5-Air` was tested from `unsloth/GLM-4.5-Air-GGUF:UD-Q4_K_XL` through llama.cpp on the GX10, then through OpenGate/Codex. This was a feasibility-first GGUF cell: the Q8_0 listing is about 117 GB before KV cache, while the UD-Q4_K_XL load was 63.06 GiB on disk and exposed a usable 64k endpoint.
+
+Serving facts:
+
+- llama.cpp served `GLM-4.5-Air-UD-Q4_K_XL` with `--ctx-size 65536`, `--n-gpu-layers all`, flash attention, Jinja, reasoning auto, and q8_0 KV cache.
+- `/v1/models` reported `n_params = 110468824832`, `n_ctx_train = 131072`, and model blob size `67711712256`.
+- llama.cpp offloaded `48/48` layers to GPU, with about `62209 MiB` CUDA model buffer and `6256 MiB` q8_0 KV cache at 64k.
+
+Live CSVQL runs:
+
+| Run | Input Mode | Context | Duration | Exchanges | Upstream Errors | Commands | Files | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260705-172631-glm45air_udq4xl_64k_ogcodex_csvql_flatten_no_writefile-repair` | forced flatten | 65536 | 518.578 s | 12 | 1 | 9 | 2 | failed with corrupt partial files and a final llama.cpp 500 on raw `<tool_call>request_plugin_install` in the flattened transcript |
+| `20260705-173954-glm45air_udq4xl_64k_ogcodex_csvql_auto_no_writefile_r2-repair` | auto/native | 65536 | 1313.724 s | 8 | 0 | 5 | 0 | failed after a 16k-token skill-directory search loop and no app artifacts |
+
+The forced-flatten run proved the model could enter a file-writing loop, but the artifacts were not usable: `csvql/__init__.py` contained invalid bytes, `csvql/engine.py` had backtick-quoted Python such as ``count`` and invalid string quoting, and `run_csvql.py` was missing. Independent `compileall` failed immediately.
+
+The auto/native retry avoided the flattened-transcript 500 and kept the returned channel clean, but behavior got worse: GLM spent the run chasing `writing-plans` skill files under `C:/Users/pstoc/.codex/skills/.system`, emitted a 56 KB final message full of repeated directory-search command transcripts, and wrote zero CSVQL files. `compileall` could not even list `csvql` or `run_csvql.py`.
+
+Conclusion: the GGUF/llama.cpp serving path is viable for GLM-4.5-Air on the GX10 at UD-Q4_K_XL, but the model did not complete the CSVQL benchmark through OG/Codex. The first failure mixed model behavior with flattened-transcript parser fragility; the second removed that concern and still failed on task drift and budget burn. Detailed setup and evidence are in `docs\glm-4-5-air-gguf.md`.
 
 ## Qwen3.6-27B Validation Status
 

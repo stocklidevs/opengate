@@ -10,6 +10,8 @@ Checked against local OpenAI-compatible serving endpoints, mostly vLLM at `http:
 - MiniMax-M3-MXFP8 deployment checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - Devstral-Small-2507 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - Qwen3.6-27B Q8_0 GGUF through llama.cpp and Qwen Code CSVQL checked on 2026-07-05.
+- Qwen3-Coder-30B-A3B-Instruct Q8_0 GGUF through llama.cpp and OG/Codex CSVQL checked on 2026-07-05.
+- GLM-4.5-Air GGUF UD-Q4_K_XL through llama.cpp and OG/Codex CSVQL checked on 2026-07-05.
 
 ## Live Server
 
@@ -154,6 +156,70 @@ $Prompt | qwen `
 ```
 
 Use a long wall-clock guard from the start. The recorded run first used `120m`, hit that guard while still making progress, then completed only after resuming the same Qwen Code chat with an `8h` guard.
+
+## Reproducible Qwen3-Coder-30B-A3B-Instruct Q8_0 llama.cpp Setup
+
+The 2026-07-05 OG/Codex probe used Unsloth's Q8_0 GGUF through llama.cpp at 128k context:
+
+```bash
+/home/altsens/llama.cpp/build/bin/llama-server \
+  -hf unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q8_0 \
+  --host 0.0.0.0 \
+  --port 8004 \
+  --alias Qwen3-Coder-30B-A3B-Instruct-Q8_0 \
+  --ctx-size 131072 \
+  --n-gpu-layers all \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --jinja \
+  --reasoning off \
+  --no-webui
+```
+
+Observed serving facts:
+
+- Architecture: `qwen3moe`
+- Model type: `30B.A3B`
+- Parameters: `30.53 B`
+- Train context: `262144`
+- Runtime context: `131072`
+- Layers: `49/49` offloaded to GPU
+- CUDA model buffer: about `30658 MiB`
+- 128k q8_0 KV cache: about `6528 MiB`
+
+The endpoint was healthy and did not hit memory or context limits, but the CSVQL run failed because the model fabricated a completed tool transcript instead of creating files. See `docs\qwen3-coder-30b-a3b-instruct-gguf.md`.
+
+## Reproducible GLM-4.5-Air GGUF llama.cpp Setup
+
+The 2026-07-05 GLM GGUF probe used `UD-Q4_K_XL`, not Q8_0. Q8_0 was left as a separate memory-risk cell because the listing is about 117 GB before KV cache.
+
+```bash
+/home/altsens/llama.cpp/build/bin/llama-server \
+  -hf unsloth/GLM-4.5-Air-GGUF:UD-Q4_K_XL \
+  --host 0.0.0.0 \
+  --port 8003 \
+  --alias GLM-4.5-Air-UD-Q4_K_XL \
+  --ctx-size 65536 \
+  --n-gpu-layers all \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --jinja \
+  --reasoning auto \
+  --no-webui
+```
+
+Observed serving facts:
+
+- Parameters: `110.47 B`
+- Train context: `131072`
+- Runtime context: `65536`
+- Layers: `48/48` offloaded to GPU
+- CUDA model buffer: about `62209 MiB`
+- 64k q8_0 KV cache: about `6256 MiB`
+
+The endpoint loaded and served a usable 64k target. OG/Codex still failed CSVQL: the forced-flatten run wrote corrupt partial files, and the native/auto retry produced no app files after drifting into skill-directory search. See `docs\glm-4-5-air-gguf.md`.
 
 ## Reproducible GLM-4.5-Air-NVFP4 Setup
 

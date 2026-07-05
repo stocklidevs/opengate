@@ -356,6 +356,7 @@ Harness notes:
 - The benchmark runner now exposes `-UpstreamInputMode` so the forced flattened path is reproducible.
 - The benchmark runner and OpenGate CLI now expose `-DisableWriteFileTool` / `--no-write-file-tool`, because `opengate.toml` can otherwise enable write-file injection even when the run command omits `-WriteFileTool`.
 - The OpenGate/Codex result reproduced the Qwen Code pass once native Qwen template issues and write-file transcript confusion were removed. This weakens the "Qwen Code only" interpretation and strengthens the Q8_0 plus large-context plus patience hypothesis.
+- This does not yet prove that all Qwen3.6-family GGUF or Q8_0 variants pass. The later Qwen3-Coder-30B-A3B-Instruct Q8_0 OG/Codex run deployed cleanly at 128k but fabricated tool history and created zero files. The clean next isolation cell is still Qwen3.6-35B-A3B GGUF Q8_0 through Qwen Code, because earlier 35B FP8/NVFP4-style CSVQL attempts were artifact-heavy but correctness-failed.
 
 ## 2026-05-11 Live Reference-Site Fetch
 

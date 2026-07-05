@@ -173,6 +173,43 @@ The best Devstral run used `-WriteFileTool` and landed `README.md`, the two CSV 
 
 Conclusion: Devstral-Small-2507 is parked for this benchmark. It can run on the GX10 and enter the Codex file-writing loop, but it did not complete a runnable CSVQL application. Detailed notes are in `docs\devstral-small-2507.md`.
 
+## 2026-07-05 Qwen3-Coder-30B-A3B-Instruct Q8_0 Through OpenGate/Codex CSVQL
+
+Model: `Qwen3-Coder-30B-A3B-Instruct-Q8_0`, served from `unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q8_0` with llama.cpp, `--ctx-size 131072`, all layers on GPU, flash attention, Jinja, reasoning off, and q8_0 KV cache.
+
+Summary:
+
+| Run | Variant | Output Cap | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260705-182317-qwen3coder30b_a3b_q8_0_128k_ogcodex_csvql_flatten_no_writefile-repair` | forced flattened transcript, no write-file injection | 16384 | 7 | 0 | 5 | 0 | failed with fake transcript fabrication and no artifacts |
+
+The model loaded cleanly and the run stayed inside the 128k budget. llama.cpp reported a 30.53B/A3B MoE model, train context `262144`, runtime context `131072`, `49/49` layers offloaded, about `30658 MiB` CUDA model buffer, and about `6528 MiB` q8_0 KV cache.
+
+The run did not create the CSVQL app. The only workspace entries were directories: `csvql/` and `csvql/csvql/`. Independent verification failed at the existence gate because `run_csvql.py` was missing and there were no implementation, fixture, README, or test files.
+
+The failure shape is important: Qwen generated a large assistant text block that looked like a complete tool transcript, including fake shell calls, fake file writes, fake pytest/manual-query outputs, and then a final answer claiming success. Those fake transcript calls were not real structured tool calls, so Codex did not execute them. OpenGate recorded upstream text leaks and kept returned invalid calls at zero, but it cannot turn fabricated work into real artifacts.
+
+Conclusion: Qwen3-Coder-30B-A3B-Instruct Q8_0 is deployable at 128k on the GX10, but it failed the OG/Codex CSVQL task by fabricating completion rather than writing files. Detailed notes are in `docs\qwen3-coder-30b-a3b-instruct-gguf.md`.
+
+This is an important counterweight to the Qwen3.6-27B Q8_0 pass below: Q8_0 and llama.cpp are not sufficient by themselves. The model still has to stay grounded in executable tool calls instead of simulating a completed transcript.
+
+## 2026-07-05 GLM-4.5-Air GGUF UD-Q4_K_XL Through OpenGate/Codex CSVQL
+
+Model: `GLM-4.5-Air-UD-Q4_K_XL`, served from `unsloth/GLM-4.5-Air-GGUF:UD-Q4_K_XL` with llama.cpp, `--ctx-size 65536`, all layers on GPU, flash attention, Jinja, reasoning auto, and q8_0 KV cache.
+
+Summary:
+
+| Run | Variant | Output Cap | Exchanges | Upstream Errors | Commands | Files Landed | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260705-172631-glm45air_udq4xl_64k_ogcodex_csvql_flatten_no_writefile-repair` | forced flattened transcript, no write-file injection | 16384 | 12 | 1 | 9 | 2 | failed with corrupt partial files and a final raw `<tool_call>` parser 500 |
+| `20260705-173954-glm45air_udq4xl_64k_ogcodex_csvql_auto_no_writefile_r2-repair` | auto/native input, no write-file injection | 16384 | 8 | 0 | 5 | 0 | failed with a 16k-token skill-directory search loop and no artifacts |
+
+The first run created only a nested `csvql/csvql/__init__.py` and a partial `csvql/csvql/engine.py`. Independent verification failed immediately: `__init__.py` contained invalid bytes, `engine.py` had invalid Python such as backtick-quoted identifiers, and `run_csvql.py` was missing. The final response was an OpenGate upstream error from llama.cpp because the flattened transcript contained a raw `<tool_call>request_plugin_install...</tool_call>` block from an earlier GLM turn.
+
+The retry switched to `-UpstreamInputMode auto` so OpenGate could use the server's native Responses/tool-history path. This avoided upstream errors and kept returned captures clean, but GLM drifted into reading/searching Codex skill directories instead of building CSVQL. The run ended after about 21m54s with zero generated files. `compileall` could not list `csvql` or `run_csvql.py`.
+
+Conclusion: GLM-4.5-Air GGUF loaded cleanly and served a usable 64k endpoint on the GX10, but it did not complete the CSVQL app through OG/Codex. The forced-flatten result is partially confounded by transcript parser fragility; the auto/native retry is the cleaner verdict and is a behavior failure. Detailed notes are in `docs\glm-4-5-air-gguf.md`.
+
 ## 2026-07-05 Qwen3.6-27B Q8_0 Through OpenGate/Codex CSVQL
 
 Model: `Qwen3.6-27B-Q8_0`, same ggml-org Q8_0 GGUF and llama.cpp endpoint used by the passing Qwen Code run, with `-c 262144`, `-ngl all`, flash attention enabled, and OpenGate/Codex configured with `model_context_window=262144`.
@@ -203,6 +240,8 @@ python -B -m pytest -q
 Manual CLI checks also matched the challenge outputs: NYC filtering returned Alice and Carol, descending order plus limit returned Dave and Carol, the books join returned Carol's `15.0` and `25.0` rows, and grouped aggregates returned LA/NYC/SF totals. `python run_csvql.py ...` returned the same NYC filter rows as `python -m csvql`.
 
 Conclusion: the Q8_0 model can complete CSVQL through OpenGate/Codex as well as Qwen Code. The critical differences from the failed probes were forced flattened input for llama.cpp/Qwen, disabling injected `write_file`, preserving the full 262k context, and allowing enough wall-clock time for long non-streaming model calls.
+
+Together with the Qwen Code pass, this makes `Qwen3.6-27B-Q8_0` the cleanest positive local-model cell so far. The adjacent 35B FP8/NVFP4 attempts remain correctness failures, so the next clean isolation target is `Qwen3.6-35B-A3B-GGUF:Q8_0` under the same Qwen Code pattern.
 
 ## 2026-07-05 Qwen3.6-27B Q8_0 Through Qwen Code CSVQL
 
