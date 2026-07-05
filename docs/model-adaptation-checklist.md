@@ -72,7 +72,7 @@ Create a model note under `docs\` with:
 Current model notes:
 
 - `docs\qwen3-coder-next.md` records the first known-good Qwen3-Coder-Next setup.
-- `docs\qwen3-6-27b.md` prepares Qwen3.6-27B setup, benchmark commands, and result placeholders.
+- `docs\qwen3-6-27b.md` records Qwen3.6-27B vLLM/OpenGate setup, the parked proxy-path result, and the 2026-07-05 Q8_0 GGUF/Qwen Code CSVQL pass.
 - `docs\deepseek-coder-v2-lite.md` records DeepSeek-Coder-V2-Lite setup, repaired synthetic/live protocol status, and the parked behavior-limited decision.
 - `docs\gemma-4-e4b-it.md` records Gemma-4-E4B-IT setup, repair evidence, and the current live-smoke-clean decision.
 - `docs\glm-4-5-air-nvfp4.md` records GLM-4.5-Air-NVFP4 serving facts, CSVQL live runs, the 64k output-cap finding, and the parked behavior-limited decision.

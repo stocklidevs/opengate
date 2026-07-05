@@ -11,8 +11,9 @@ This note records the OpenGate validation status for `Qwen/Qwen3.6-27B`: setup, 
 - OpenGate mode: `repair`
 - Upstream input mode: `auto`
 - Context policy: `spoon` for live Codex work; `full` and `spoon` both useful for synthetic comparison.
-- Validation status: direct basic smoke complete; direct serious exposed a protocol incompatibility; OpenGate repair/spoon partial validation completed before the external command timeout; live optimization is parked because the remaining failures are task-progress/runtime behavior rather than clean proxy repair.
-- Validation date: `2026-05-11` UTC, `2026-05-10` America/New_York.
+- Validation status: direct basic smoke complete; direct serious exposed a protocol incompatibility; OpenGate repair/spoon partial validation completed before the external command timeout; live optimization on the vLLM/OpenGate path is parked because the remaining failures are task-progress/runtime behavior rather than clean proxy repair.
+- Additional CSVQL status: `Qwen3.6-27B-Q8_0` through llama.cpp and Qwen Code `0.19.5` passed the full CSVQL challenge on 2026-07-05.
+- Validation dates: vLLM/OpenGate path `2026-05-11` UTC, `2026-05-10` America/New_York; Q8_0/Qwen Code CSVQL path `2026-07-05`.
 
 ## vLLM Setup
 
@@ -31,6 +32,97 @@ vllm serve "Qwen/Qwen3.6-27B" \
 ```
 
 The two tool-related flags are the important part for Codex-style use: `--enable-auto-tool-choice` and `--tool-call-parser qwen3_coder`. The reasoning parser should remain `qwen3` so vLLM separates reasoning text from normal assistant output where the model supports it.
+
+## llama.cpp Q8_0 Qwen Code Setup
+
+The first successful local CSVQL run for this model used ggml-org's Q8_0 GGUF with llama.cpp rather than vLLM/OpenGate:
+
+```bash
+/home/altsens/llama.cpp/build/bin/llama-server \
+  -m /home/altsens/models/ggml-org/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q8_0.gguf \
+  --host 0.0.0.0 \
+  --port 8002 \
+  --alias Qwen3.6-27B-Q8_0 \
+  -c 262144 \
+  -ngl all \
+  -fa on \
+  --fit off \
+  --reasoning auto \
+  --reasoning-format deepseek \
+  --jinja \
+  --no-webui
+```
+
+Observed serving facts:
+
+- Model root: `ggml-org/Qwen3.6-27B-GGUF`
+- File: `Qwen3.6-27B-Q8_0.gguf`
+- Quantization: Q8_0
+- File size: about 28.6 GB
+- Context: `262144`
+- Served alias: `Qwen3.6-27B-Q8_0`
+- Endpoint: `http://<gx10-host>:8002/v1`
+- GPU placement: all 65 layers on GPU
+
+Qwen Code CLI version:
+
+```text
+0.19.5
+```
+
+Workspace Qwen Code model settings:
+
+```json
+{
+  "env": {
+    "OPENAI_API_KEY": "sk-local-qwen-q8",
+    "OPENAI_BASE_URL": "http://<gx10-host>:8002/v1",
+    "OPENAI_MODEL": "Qwen3.6-27B-Q8_0"
+  },
+  "modelProviders": {
+    "openai": {
+      "protocol": "openai",
+      "models": [
+        {
+          "id": "Qwen3.6-27B-Q8_0",
+          "name": "Qwen3.6-27B Q8_0 GGUF (GX10 llama.cpp 262k)",
+          "envKey": "OPENAI_API_KEY",
+          "baseUrl": "http://<gx10-host>:8002/v1",
+          "generationConfig": {
+            "timeout": 1800000,
+            "maxRetries": 0,
+            "contextWindowSize": 262144,
+            "samplingParams": {
+              "temperature": 0.2,
+              "max_tokens": 8192
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Run the CSVQL prompt from an isolated workspace. The important harness detail is that the prompt is piped through stdin and `--prompt ""` is still provided, so Qwen Code consumes the full multi-line prompt rather than just the first line:
+
+```powershell
+$Prompt = (Get-Content -LiteralPath fixtures\codex_live\csvql_only.json -Raw | ConvertFrom-Json).cases[0].prompt
+$Prompt | qwen `
+  --auth-type openai `
+  --model Qwen3.6-27B-Q8_0 `
+  --openai-base-url http://<gx10-host>:8002/v1 `
+  --openai-api-key sk-local-qwen-q8 `
+  --approval-mode yolo `
+  --max-wall-time 8h `
+  --max-session-turns 300 `
+  --openai-logging `
+  --chat-recording true `
+  --input-format text `
+  --prompt ""
+```
+
+Do not use a 120-minute wall-clock guard for this cell. The recorded run hit that guard while still making progress, then completed after resuming the same Qwen Code chat with an 8-hour guard.
 
 ## OpenGate Setup
 
@@ -178,6 +270,71 @@ OpenGate partial spoon captures:
 - Derived strict successes on completed captures: `14/17`
 
 Interpretation: the direct serious failure is not yet evidence that Qwen3.6 cannot call tools. It is evidence that this vLLM Responses endpoint rejects Codex-like `developer` messages. OpenGate `0.6.9` addresses this class architecturally by probing protocol support, flattening unsupported roles independently of spoon compression, and retrying flattened input after native role/history validation errors.
+
+## 2026-07-05 Q8_0 Qwen Code CSVQL Result
+
+Run folder:
+
+```text
+runs\qwen-code-live\20260705-1002-qwen36_27b_q8_0_262k_qwencode_csvql_fullprompt_r3
+```
+
+This was the valid full-prompt run. Earlier local attempts were discarded as harness-invalid because one delivered only the first prompt line and another stalled after a partial stdin launch. The `r3` run used the exact prompt from `fixtures\codex_live\csvql_only.json`.
+
+Summary:
+
+| Metric | Value |
+| --- | ---: |
+| Harness | Qwen Code CLI `0.19.5` |
+| Server | llama.cpp GGUF Q8_0 |
+| Context window | `262144` |
+| Initial wall guard | `120m`, hit before completion |
+| Resume wall guard | `8h` |
+| Total observed run span | about 2h41m |
+| Qwen Code tool calls | 79 |
+| Files landed | 12 source/test/fixture files |
+| Final verifier | pass |
+
+Independent verification after Qwen Code exited:
+
+```text
+python -m compileall -q csvql run_csvql.py
+python -m pytest -q
+43 passed in 0.24s
+```
+
+Manual CLI outputs matched the challenge contract:
+
+```text
+SELECT name, city FROM customers WHERE city = 'NYC'
+name,city
+Alice,NYC
+Carol,NYC
+
+SELECT name FROM customers ORDER BY name DESC LIMIT 2
+name
+Dave
+Carol
+
+SELECT c.name, o.amount FROM customers c JOIN orders o ON c.id = o.customer_id WHERE o.category = 'books' ORDER BY o.amount
+c.name,o.amount
+Carol,15.0
+Carol,25.0
+
+SELECT c.city, COUNT(*) AS n, SUM(o.amount) AS total FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.city ORDER BY c.city
+c.city,n,total
+LA,2,175
+NYC,4,115
+SF,1,200
+```
+
+Audit notes:
+
+- Qwen Code added a local `conftest.py` to route pytest temp directories into the workspace because the default Windows temp path had permission problems. This is not part of the CSVQL app logic, but it is part of the run evidence.
+- Qwen Code changed one generated test expectation for grouped `COUNT(column)` from `2` to `3`. The edit appears correct because the fixture has three grouped cities, but it is still a self-test correction and should be called out in comparisons.
+- Before settling on the local pytest workaround, Qwen Code attempted to remove or take ownership of the stale Windows temp path and was denied. Future challenge harnesses should avoid giving local agents a reason to repair machine-level temp state.
+
+Interpretation: the Q8_0/Qwen Code path changes the story for Qwen3.6. The earlier vLLM/OpenGate path remains parked for proxy optimization because its failures were not clean OpenGate repair targets. But the model itself, in this GGUF/Qwen Code serving combination with a 262k context budget and enough wall-clock time, did complete the CSVQL application and passed independent verification.
 
 ## 2026-05-11 Live Reference-Site Fetch
 

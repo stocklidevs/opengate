@@ -1,6 +1,6 @@
 # Benchmark Notes
 
-Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
+Checked against direct vLLM and later local OpenAI-compatible serving endpoints:
 
 - Qwen3-Coder-Next checked on 2026-05-09.
 - GLM-4.7-Flash checked on 2026-05-10.
@@ -12,6 +12,7 @@ Checked against direct vLLM at `http://127.0.0.1:8001/v1`:
 - MiniMax-M3-MXFP8 deployment checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - Devstral-Small-2507 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - Qwen3-Coder-Next through Qwen Code CSVQL checked on 2026-07-03.
+- Qwen3.6-27B Q8_0 GGUF through Qwen Code CSVQL checked on 2026-07-05.
 
 ## Suites
 
@@ -107,6 +108,7 @@ This table records the practical Codex-backend status after each model's baselin
 | --- | ---: | ---: | --- | --- |
 | Qwen3-Coder-Next | `43/60` serious strict successes | `60/60` serious strict successes | Known-good first live smoke | Keep as the known-good local baseline |
 | Qwen3-Coder-Next via Qwen Code | Live CSVQL only; Qwen Code `0.19.5`, GX10 vLLM 128k | n/a | Parked after CSVQL: 32k hit Qwen Code context compression after one big file; 128k continued but drifted into a single-file demo and self-debug loop | Treat as harness/model behavior evidence, not an OpenGate repair target; see `docs/qwen3-coder-next.md` |
+| Qwen3.6-27B Q8_0 via Qwen Code | Live CSVQL only; Qwen Code `0.19.5`, llama.cpp GGUF Q8_0, 262k | n/a | **Passed CSVQL** after one resume past the 120-minute wall guard; `43/43` pytest, manual CLI checks, and `run_csvql.py` all passed | Record as the first local CSVQL pass for this challenge; harness evidence, not an OpenGate repair target; see `docs/qwen3-6-27b.md` |
 | GLM-4.7-Flash | `2/20` serious strict successes | `20/20` repair/full, `19/20` repair/spoon | Synthetic repair validated | Keep as repaired for the GLM leak dialect |
 | Qwen3.6-27B | `9/9` direct smoke, but `0/20` direct serious due to protocol errors | `14/17` derived strict successes on partial repair/spoon | Parked after live task-progress/runtime failures | Do not optimize further until a clean proxy-layer failure appears |
 | DeepSeek-Coder-V2-Lite-Instruct | `9/60` serious strict successes | `48/60` repair/full, `17/20` repair/spoon | Protocol-clean latest smoke, but behavior-limited | Parked: leaks/protocol are repaired, but the model does not behave reliably enough for Codex; do not repair model behavior |
@@ -149,6 +151,42 @@ The 128k run landed:
 It missed the required `customers.csv`, `orders.csv`, `run_csvql.py`, `csvql/__init__.py`, `csvql/__main__.py`, and `tests/` suite. Syntax parsing of `csvql.py` passed, but independent verification failed the benchmark contract: `python -m csvql --query ... --table customers=customers.csv --table orders=orders.csv` treated `--query` as a CSV path and failed; `python run_csvql.py ...` failed because `run_csvql.py` did not exist; pytest was not run because there was no tests directory.
 
 Interpretation: the 128k retry proves the first Qwen Code failure was a harness context-budget ceiling, not a GX10/vLLM limit. It does not change the CSVQL capability result. Qwen Code kept using tools and running Python, but it lost the benchmark goal, invented different sample data, and never returned to the required artifact layout. This is behavior/artifact drift, not an OpenGate protocol or repair target.
+
+## Qwen3.6-27B Q8_0 Qwen Code CSVQL Pass (2026-07-05)
+
+The same public CSVQL challenge prompt was then run through Qwen Code CLI `0.19.5` against `Qwen3.6-27B` served by llama.cpp from ggml-org's Q8_0 GGUF. This was not an OpenGate/Codex proxy run. It is recorded here because it is the first local-model run in this experiment that independently passed the full CSVQL artifact contract.
+
+Serving and harness facts:
+
+- Model root: `ggml-org/Qwen3.6-27B-GGUF`
+- GGUF file: `Qwen3.6-27B-Q8_0.gguf`, about 28.6 GB
+- Served alias: `Qwen3.6-27B-Q8_0`
+- Server: llama.cpp `llama-server` on the GX10, OpenAI-compatible endpoint on port `8002`
+- Context: `-c 262144`, with Qwen Code `contextWindowSize = 262144`
+- Qwen Code: `0.19.5`, OpenAI auth mode, `approval-mode yolo`
+- Run folder: `runs\qwen-code-live\20260705-1002-qwen36_27b_q8_0_262k_qwencode_csvql_fullprompt_r3`
+
+| Run | Context Window | Wall Clock | Exit | Files Landed | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `20260705-1002-qwen36_27b_q8_0_262k_qwencode_csvql_fullprompt_r3` | 262144 | about 2h41m including resume | 0 after resume | 12 source/test/fixture files | Passed CSVQL: compile, pytest, manual CLI checks, and `run_csvql.py` entry point |
+
+The initial valid run used the full prompt via stdin and a 120-minute wall-clock guard. It hit only that guard, not a task conclusion. Resuming the same Qwen Code chat with an 8-hour wall-clock limit let it finish at about 2h41m total. The final independent verification was:
+
+```text
+python -m compileall -q csvql run_csvql.py
+python -m pytest -q
+43 passed in 0.24s
+```
+
+Manual checks matched the expected challenge outputs for NYC filtering, descending order plus limit, join/filter/order, grouped aggregates, and the standalone `run_csvql.py` entry point.
+
+Important caveats:
+
+- Qwen Code added a local `conftest.py` overriding pytest's `tmp_path` to work around a Windows temp-directory permission issue. This made verification stable, but it is test-environment substrate rather than CSVQL app logic.
+- It changed one generated test expectation for `COUNT(column)` from `2` to `3`; that change appears correct because the fixture contains three grouped cities, but it should remain part of the audit trail.
+- Before adding the local pytest workaround, it attempted to remove or take ownership of the stale Windows temp directory and was denied. That is a useful harness-safety observation for future local-agent challenges.
+
+Interpretation: this result reverses the prior working hypothesis that current local models could not complete the CSVQL challenge unaided. The successful cell is specific: Qwen3.6-27B, Q8_0 GGUF, llama.cpp, Qwen Code, 262k advertised context, and enough wall-clock budget. The run still needed persistence through slow generation and a wall-clock resume, so the learning is not "any Qwen3.6 setup passes." It is that the right quantization/serving/harness combination can cross the artifact-completion line.
 
 ## Devstral-Small-2507 Live CSVQL Probe (2026-07-02/03)
 
@@ -220,6 +258,7 @@ Comparison against the same CSVQL family of runs:
 | `Kimi-Linear-48B-A3B-NVFP4` 64k native/spoon | 1 each | 0 | 0 | Did not enter the tool loop; produced unrelated prose |
 | `Devstral-Small-2507` 64k write-file r3 | 9 | 7 | 5 | Entered the file-writing loop, but produced broken Python and missed CLI/tests |
 | `Qwen3-Coder-Next` via Qwen Code 128k r2 | n/a | tool loop active | 7 | Continued past context compression, but lost the requested CSVQL contract and self-debugged a different single-file demo |
+| `Qwen3.6-27B Q8_0` via Qwen Code 262k r3 | n/a | 79 Qwen Code tool calls | 12 | Passed full CSVQL after resume; independent compile, pytest, manual CLI, and entry-point checks passed |
 | `Qwen3.6-27B-NVFP4` | 44 | 57 | 12 | Much more complete workspace, still correctness-failed |
 | `Qwen3.6-35B-A3B-FP8 r5` | 95 | 113 | 14 | Most complete CSVQL attempt so far, still correctness-failed |
 

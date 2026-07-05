@@ -173,6 +173,30 @@ The best Devstral run used `-WriteFileTool` and landed `README.md`, the two CSV 
 
 Conclusion: Devstral-Small-2507 is parked for this benchmark. It can run on the GX10 and enter the Codex file-writing loop, but it did not complete a runnable CSVQL application. Detailed notes are in `docs\devstral-small-2507.md`.
 
+## 2026-07-05 Qwen3.6-27B Q8_0 Through Qwen Code CSVQL
+
+Model: `Qwen3.6-27B-Q8_0`, served from ggml-org's Q8_0 GGUF with llama.cpp `llama-server`, `-c 262144`, `-ngl all`, flash attention enabled, OpenAI-compatible endpoint on the GX10. Harness: Qwen Code CLI `0.19.5`, configured as an OpenAI-compatible provider against `http://<gx10-host>:8002/v1`, with `contextWindowSize = 262144`.
+
+Summary:
+
+| Run | Context Window | Wall Clock | Exit | Files Landed | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `20260705-1002-qwen36_27b_q8_0_262k_qwencode_csvql_fullprompt_r3` | 262144 | about 2h41m including resume | 0 after resume | 12 | full CSVQL pass |
+
+The valid run used the exact CSVQL prompt from `fixtures\codex_live\csvql_only.json` via stdin. A first 120-minute wall-clock guard expired while the model was still actively fixing the app, so the same Qwen Code chat was resumed with an 8-hour guard. The resume completed with a runnable package, fixtures, tests, and CLI entry points.
+
+Independent verification after the Qwen Code process exited:
+
+```text
+python -m compileall -q csvql run_csvql.py
+python -m pytest -q
+43 passed in 0.24s
+```
+
+Manual CLI checks also matched the challenge outputs: NYC filtering returned Alice and Carol, descending order plus limit returned Dave and Carol, the books join returned Carol's `15.0` and `25.0` rows, grouped aggregates returned LA/NYC/SF totals, and `run_csvql.py` produced the same result as `python -m csvql`.
+
+Conclusion: this is the first recorded local-model CSVQL pass in this experiment. It is not an OpenGate repair result and should not be mixed with proxy repair metrics, but it is strong evidence that Qwen3.6-27B can complete the challenge when served as Q8_0 GGUF through llama.cpp and driven by Qwen Code with a 262k context budget and enough wall-clock time. Caveats: the run added a local `conftest.py` workaround for a Windows temp ACL issue, and it corrected one generated test expectation from `2` to `3` grouped cities.
+
 ## 2026-07-03 Qwen3-Coder-Next Through Qwen Code CSVQL
 
 Model: `Qwen3-Coder-Next`, served from `cyankiwi/Qwen3-Coder-Next-AWQ-4bit` with vLLM nightly aarch64 and `qwen3_coder` tool parser. Harness: Qwen Code CLI `0.19.5`, configured as an OpenAI-compatible provider against `http://<gx10-host>:8000/v1`.

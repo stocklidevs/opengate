@@ -1,6 +1,6 @@
 # vLLM Notes
 
-Checked against `http://127.0.0.1:8001`:
+Checked against local OpenAI-compatible serving endpoints, mostly vLLM at `http://127.0.0.1:8001`:
 
 - Qwen3-Coder-Next on 2026-05-09.
 - GLM-4.7-Flash on 2026-05-10.
@@ -9,6 +9,7 @@ Checked against `http://127.0.0.1:8001`:
 - Kimi-Linear-48B-A3B-NVFP4 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - MiniMax-M3-MXFP8 deployment checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
 - Devstral-Small-2507 live CSVQL checked on 2026-07-03 UTC, 2026-07-02 America/New_York.
+- Qwen3.6-27B Q8_0 GGUF through llama.cpp and Qwen Code CSVQL checked on 2026-07-05.
 
 ## Live Server
 
@@ -76,6 +77,83 @@ vllm serve "Qwen/Qwen3.6-27B" \
 OpenGate should keep using `model = "auto"` in `opengate.toml` for this target. On startup, `GET /v1/models` should report `Qwen3.6-27B`, and OpenGate should rewrite Codex's requested model to that active upstream model. This keeps the Codex profile stable while the served vLLM model changes.
 
 The first endpoint check reported `root = Qwen/Qwen3.6-27B` and `max_model_len = 65536`. Direct `codex_shell_smoke` passed `9/9`, but direct `qwen_serious_tool_stress` returned `HTTP 400: Unexpected message role` for all 20 cases because that suite uses a Codex-like `developer` message. OpenGate `0.6.9` handles this as a protocol-adaptation problem: startup probes detect unsupported roles, `--upstream-input-mode auto` can flatten unsupported role shapes independently from spoon compression, and native role/history validation errors are retried once with flattened input. Prepared validation steps and result placeholders are in `docs\qwen3-6-27b.md`.
+
+## Reproducible Qwen3.6-27B Q8_0 llama.cpp Setup
+
+The CSVQL pass on 2026-07-05 used a different serving stack from the vLLM setup above: ggml-org's Q8_0 GGUF through llama.cpp, driven by Qwen Code CLI `0.19.5`.
+
+```bash
+/home/altsens/llama.cpp/build/bin/llama-server \
+  -m /home/altsens/models/ggml-org/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q8_0.gguf \
+  --host 0.0.0.0 \
+  --port 8002 \
+  --alias Qwen3.6-27B-Q8_0 \
+  -c 262144 \
+  -ngl all \
+  -fa on \
+  --fit off \
+  --reasoning auto \
+  --reasoning-format deepseek \
+  --jinja \
+  --no-webui
+```
+
+Observed serving facts:
+
+- GGUF file: `Qwen3.6-27B-Q8_0.gguf`
+- Quantization: Q8_0
+- File size: about 28.6 GB
+- Context: `n_ctx = 262144`
+- Layers: all 65 layers on GPU
+- Endpoint: `http://<gx10-host>:8002/v1`
+- Served model alias: `Qwen3.6-27B-Q8_0`
+
+Qwen Code workspace settings used:
+
+```json
+{
+  "modelProviders": {
+    "openai": {
+      "protocol": "openai",
+      "models": [
+        {
+          "id": "Qwen3.6-27B-Q8_0",
+          "baseUrl": "http://<gx10-host>:8002/v1",
+          "generationConfig": {
+            "timeout": 1800000,
+            "maxRetries": 0,
+            "contextWindowSize": 262144,
+            "samplingParams": {
+              "temperature": 0.2,
+              "max_tokens": 8192
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Run Qwen Code from an isolated workspace with the exact CSVQL prompt piped through stdin:
+
+```powershell
+$Prompt = (Get-Content -LiteralPath fixtures\codex_live\csvql_only.json -Raw | ConvertFrom-Json).cases[0].prompt
+$Prompt | qwen `
+  --auth-type openai `
+  --model Qwen3.6-27B-Q8_0 `
+  --openai-base-url http://<gx10-host>:8002/v1 `
+  --openai-api-key sk-local-qwen-q8 `
+  --approval-mode yolo `
+  --max-wall-time 8h `
+  --max-session-turns 300 `
+  --openai-logging `
+  --chat-recording true `
+  --input-format text `
+  --prompt ""
+```
+
+Use a long wall-clock guard from the start. The recorded run first used `120m`, hit that guard while still making progress, then completed only after resuming the same Qwen Code chat with an `8h` guard.
 
 ## Reproducible GLM-4.5-Air-NVFP4 Setup
 
